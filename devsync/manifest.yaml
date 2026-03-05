@@ -1,0 +1,364 @@
+# DevSync Manifest - Define your complete development environment
+version: "1.0"
+name: "Full Stack Developer Setup"
+description: "Complete development environment with modern tools"
+
+# Package managers to ensure are installed
+package_managers:
+  darwin: homebrew  # Auto-installs if missing
+  windows: chocolatey  # Auto-installs if missing
+  linux: auto  # Auto-detects apt/yum/dnf/pacman
+
+# System packages (installed via Homebrew on Mac, Chocolatey on Windows)
+packages:
+  # Development essentials
+  - name: git
+    darwin: git
+    windows: git
+    linux: git
+
+  - name: github-cli
+    darwin: gh
+    windows: gh
+    linux: gh
+
+  - name: docker
+    darwin: docker
+    windows: docker-desktop
+    linux: docker-ce
+
+  # Terminal & Shell
+  - name: terminal
+    darwin: iterm2
+    windows: microsoft-windows-terminal
+    skip_linux: true
+
+  - name: zsh
+    darwin: zsh
+    linux: zsh
+    skip_windows: true
+
+  - name: oh-my-zsh
+    darwin:
+      post_install: |
+        sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+    windows:
+      skip: true
+    linux:
+      post_install: |
+        sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+  # Development tools
+  - name: vscode
+    darwin: visual-studio-code
+    windows: vscode
+    linux: code
+
+  - name: postman
+    darwin: postman
+    windows: postman
+    linux: postman
+
+  - name: figma
+    darwin: figma
+    windows: figma
+    skip_linux: true
+
+  # Cloud CLIs
+  - name: aws-cli
+    darwin: awscli
+    windows: awscli
+    linux: awscli
+
+  - name: azure-cli
+    darwin: azure-cli
+    windows: azure-cli
+    linux: azure-cli
+
+  - name: gcloud
+    darwin: google-cloud-sdk
+    windows: gcloudsdk
+    linux: google-cloud-sdk
+
+  # Databases
+  - name: postgresql
+    darwin: postgresql@15
+    windows: postgresql
+    linux: postgresql
+    post_install:
+      darwin: brew services start postgresql@15
+
+  - name: redis
+    darwin: redis
+    windows: redis
+    linux: redis-server
+    post_install:
+      darwin: brew services start redis
+
+  - name: mongodb
+    darwin: mongodb-community
+    windows: mongodb
+    linux: mongodb
+    darwin_tap: mongodb/brew  # Required tap for Homebrew
+
+# Programming languages with version management
+languages:
+  python:
+    version: "3.12"
+    darwin:
+      installer: pyenv
+      packages:
+        - pip
+        - pipenv
+        - poetry
+        - black
+        - ruff
+        - pytest
+    windows:
+      installer: python  # Via Chocolatey
+      version: "3.12.0"
+      packages:
+        - pip
+        - pipenv
+        - poetry
+        - black
+        - ruff
+        - pytest
+    global_packages:
+      - httpie
+      - ipython
+      - jupyter
+
+  node:
+    version: "20"
+    darwin:
+      installer: nvm
+      post_install: |
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+        source ~/.nvm/nvm.sh
+        nvm install 20
+        nvm use 20
+    windows:
+      installer: nodejs  # Via Chocolatey
+      version: "20.10.0"
+    global_packages:
+      - typescript
+      - pnpm
+      - yarn
+      - vercel
+      - netlify-cli
+      - create-react-app
+      - @angular/cli
+      - vue-cli
+
+  rust:
+    darwin:
+      installer: rustup
+    windows:
+      installer: rustup
+    post_install: |
+      rustup default stable
+      rustup component add clippy rustfmt
+    packages:
+      - cargo-watch
+      - cargo-edit
+      - tokio-console
+
+  go:
+    version: "1.21"
+    darwin: golang
+    windows: golang
+    post_install: |
+      go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Virtual environments to create
+virtualenvs:
+  - name: ml-project
+    path: ~/venvs/ml
+    python: python3.12
+    packages:
+      - numpy
+      - pandas
+      - scikit-learn
+      - tensorflow
+      - torch
+      - jupyter
+      - matplotlib
+
+  - name: web-project
+    path: ~/venvs/web
+    python: python3.11
+    packages:
+      - django
+      - fastapi
+      - uvicorn
+      - sqlalchemy
+      - alembic
+      - celery
+      - redis
+
+# VS Code extensions to install
+vscode_extensions:
+  - ms-python.python
+  - ms-python.vscode-pylance
+  - ms-python.black-formatter
+  - dbaeumer.vscode-eslint
+  - esbenp.prettier-vscode
+  - eamodio.gitlens
+  - github.copilot
+  - github.copilot-chat
+  - ms-vscode-remote.remote-containers
+  - ms-vscode-remote.remote-ssh
+  - ms-azuretools.vscode-docker
+  - prisma.prisma
+  - rust-lang.rust-analyzer
+  - golang.go
+  - hashicorp.terraform
+  - redhat.vscode-yaml
+  - ms-vscode.makefile-tools
+
+# Shell configuration
+shell:
+  zsh_plugins:
+    - git
+    - docker
+    - kubectl
+    - aws
+    - npm
+    - python
+    - rust
+    - golang
+    - zsh-autosuggestions
+    - zsh-syntax-highlighting
+    - fzf
+
+  aliases:
+    # Git shortcuts
+    gs: git status
+    gp: git push
+    gl: git pull
+    gc: git commit -m
+    gco: git checkout
+
+    # Docker shortcuts
+    dps: docker ps
+    dimg: docker images
+    dexec: docker exec -it
+
+    # Python shortcuts
+    py: python3
+    pip: pip3
+    venv: python3 -m venv
+    activate: source venv/bin/activate
+
+    # Navigation
+    ...: cd ../..
+    ....: cd ../../..
+
+  environment_variables:
+    EDITOR: vim
+    LANG: en_US.UTF-8
+    PAGER: less
+
+# macOS specific settings
+macos:
+  defaults:
+    # Show hidden files in Finder
+    - domain: com.apple.finder
+      key: AppleShowAllFiles
+      value: true
+      type: bool
+
+    # Show path bar in Finder
+    - domain: com.apple.finder
+      key: ShowPathbar
+      value: true
+      type: bool
+
+    # Save screenshots to ~/Screenshots
+    - domain: com.apple.screencapture
+      key: location
+      value: "~/Screenshots"
+      type: string
+
+    # Disable press-and-hold for keys in favor of key repeat
+    - domain: NSGlobalDomain
+      key: ApplePressAndHoldEnabled
+      value: false
+      type: bool
+
+# Windows specific settings
+windows:
+  features:
+    - Microsoft-Hyper-V-All  # For Docker
+    - Microsoft-Windows-Subsystem-Linux  # WSL2
+
+  wsl:
+    distro: Ubuntu-22.04
+    packages:
+      - build-essential
+      - curl
+      - git
+      - vim
+
+# Git repositories to clone
+repositories:
+  - url: git@github.com:your-org/main-app.git
+    path: ~/projects/main-app
+    branch: develop
+
+  - url: git@github.com:your-org/api.git
+    path: ~/projects/api
+    branch: main
+    post_clone: |
+      cd ~/projects/api
+      npm install
+      cp .env.example .env.local
+
+  - url: git@github.com:your-org/mobile.git
+    path: ~/projects/mobile
+    branch: main
+    post_clone: |
+      cd ~/projects/mobile
+      flutter pub get
+
+# Environment files to sync
+env_files:
+  - project: ~/projects/main-app
+    filename: .env.local
+
+  - project: ~/projects/api
+    filename: .env.local
+
+  - project: ~/projects/mobile
+    filename: .env
+
+# Config files to sync (with encryption)
+configs:
+  - path: ~/.ssh/config
+    encrypted: true
+
+  - path: ~/.aws/credentials
+    encrypted: true
+
+  - path: ~/.kube/config
+    encrypted: true
+
+  - path: ~/.mcp.json
+    encrypted: true
+
+  - path: ~/.gitconfig
+    encrypted: false
+
+  - path: ~/.zshrc
+    encrypted: false
+
+# Secrets (stored encrypted, synced across machines)
+secrets:
+  OPENAI_API_KEY: required
+  ANTHROPIC_API_KEY: required
+  GITHUB_TOKEN: required
+  NPM_TOKEN: optional
+  DOCKER_TOKEN: optional
+  AWS_ACCESS_KEY_ID: optional
+  AWS_SECRET_ACCESS_KEY: optional
