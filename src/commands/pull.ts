@@ -15,6 +15,7 @@ import { EnvironmentManager } from '../lib/environment.js';
 import { requireConfirmation } from '../lib/safety.js';
 import { renderBanner } from '../lib/banner.js';
 import { renderTemplate, buildContext } from '../lib/template.js';
+import { ProfileManager } from '../lib/profiles.js';
 import { scanPackages } from '../lib/packages.js';
 import { diffPackages, formatDiff } from '../lib/package-diff.js';
 import { loadMappings } from '../lib/package-mappings.js';
@@ -164,6 +165,10 @@ export function registerPullCommand(program: Command): void {
         }
       }
 
+      // Resolve active profile
+      const profileManager = new ProfileManager(configManager.configDir);
+      const activeProfile = profileManager.getActive(config, program.opts().profile);
+
       const password = await promptPassword('Enter master password: ');
       const cryptoManager = new CryptoManager(configManager.configDir);
       cryptoManager.unlock(password);
@@ -288,8 +293,8 @@ export function registerPullCommand(program: Command): void {
 
         spinner.text = 'Restoring...';
 
-        // Build template context for this machine
-        const templateContext = buildContext(config.machine);
+        // Build template context for this machine (profile vars override machine vars)
+        const templateContext = buildContext(config.machine, activeProfile);
 
         // Resolve environment-scoped env files
         const activeEnvName = activeEnv?.name || envManager.resolve(program.opts().env);
@@ -368,7 +373,7 @@ export function registerPullCommand(program: Command): void {
             const projectConfig = (config.projects || []).find(p => p.name === project.name || resolveHome(p.path) === projectPath);
             if (projectConfig?.inject_as_env) {
               // Write to env_inject directory instead of disk
-              writeEnvInject(configManager.configDir, project, cryptoManager, activeEnvName);
+              writeEnvInject(configManager.configDir, project, cryptoManager, activeEnvName, activeProfile?.env_overrides);
               injectedProjects++;
             } else {
               restoreFiles(project.secrets || [], projectPath, cryptoManager, configManager.backupDir, options.force, 0o600);
@@ -393,7 +398,7 @@ export function registerPullCommand(program: Command): void {
 
             const projectConfig = (config.projects || []).find(p => p.name === project.name || resolveHome(p.path) === projectPath);
             if (projectConfig?.inject_as_env) {
-              writeEnvInject(configManager.configDir, project, cryptoManager, activeEnvName);
+              writeEnvInject(configManager.configDir, project, cryptoManager, activeEnvName, activeProfile?.env_overrides);
               injectedProjects++;
             } else {
               restoreFiles(project.secrets || [], projectPath, cryptoManager, configManager.backupDir, options.force, 0o600);
@@ -510,6 +515,7 @@ function writeEnvInject(
   project: any,
   cryptoManager: CryptoManager,
   environment?: string | null,
+  profileOverrides?: Record<string, string>,
 ): void {
   const injectDir = path.join(configDir, 'env_inject');
   fs.mkdirSync(injectDir, { recursive: true });
@@ -536,6 +542,11 @@ function writeEnvInject(
       }
       vars[key] = value;
     }
+  }
+
+  // Apply profile env_overrides on top
+  if (profileOverrides) {
+    Object.assign(vars, profileOverrides);
   }
 
   const projectPath = resolveHome(project.path);

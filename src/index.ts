@@ -11,7 +11,8 @@ program
   .name('configsync')
   .description('ConfigSync - Sync your development environment across machines')
   .version('0.1.0')
-  .option('--env <name>', 'set active environment for this command');
+  .option('--env <name>', 'set active environment for this command')
+  .option('--profile <name>', 'set active profile for this command');
 
 // Display environment banner before every command
 program.hook('preAction', () => {

@@ -15,6 +15,7 @@ import { registerDoctorCommand } from './doctor.js';
 import { registerSyncCommand } from './sync.js';
 import { registerMachineCommand } from './machine.js';
 import { registerEnvCommand } from './env.js';
+import { registerProfileCommand } from './profile.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -33,4 +34,5 @@ export function registerCommands(program: Command): void {
   registerDoctorCommand(program);
   registerMachineCommand(program);
   registerEnvCommand(program);
+  registerProfileCommand(program);
 }

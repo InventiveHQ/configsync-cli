@@ -9,7 +9,7 @@
 
 import os from 'node:os';
 
-import type { MachineConfig } from './config.js';
+import type { MachineConfig, ProfileDef } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,16 +29,22 @@ export interface TemplateContext {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a template context from OS builtins and optional machine config.
+ * Build a template context from OS builtins, optional machine config,
+ * and optional active profile (profile vars override machine vars).
  */
-export function buildContext(machine?: MachineConfig): TemplateContext {
+export function buildContext(machine?: MachineConfig, profile?: ProfileDef | null): TemplateContext {
+  const vars = { ...(machine?.vars ?? {}) };
+  // Profile vars override machine vars
+  if (profile?.vars) {
+    Object.assign(vars, profile.vars);
+  }
   return {
     platform: os.platform(),
     arch: os.arch(),
     hostname: os.hostname(),
     home: os.homedir(),
     tags: machine?.tags ?? [],
-    vars: machine?.vars ?? {},
+    vars,
   };
 }
 

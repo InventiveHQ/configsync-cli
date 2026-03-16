@@ -7,6 +7,7 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { ConfigManager, EnvironmentDef } from '../lib/config.js';
 import { EnvironmentManager, isValidEnvName } from '../lib/environment.js';
+import { ProfileManager } from '../lib/profiles.js';
 import { renderBanner } from '../lib/banner.js';
 import { generateShellHook, setBackgroundTint, setTabTitle, setStatusBar, resetBackground, resetStatusBar, shouldApplyEffect } from '../lib/terminal.js';
 
@@ -337,7 +338,21 @@ export function registerEnvCommand(program: Command): void {
           if (!projectPath || !cwd.startsWith(path.resolve(projectPath))) continue;
 
           const vars = data.vars || {};
-          for (const [key, value] of Object.entries(vars)) {
+
+          // Apply profile env_overrides
+          let mergedVars = vars;
+          try {
+            const config = configManager.load();
+            const profileManager = new ProfileManager(configManager.configDir);
+            const activeProfile = profileManager.getActive(config, program.opts().profile);
+            mergedVars = activeProfile?.env_overrides
+              ? { ...vars, ...activeProfile.env_overrides }
+              : vars;
+          } catch {
+            // Config may not be loadable in --for-shell path; fall back to base vars
+          }
+
+          for (const [key, value] of Object.entries(mergedVars)) {
             if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(key)) continue;
             console.log(`export ${key}=${JSON.stringify(value)}`);
           }

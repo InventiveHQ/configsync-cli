@@ -85,6 +85,15 @@ export interface TerminalEffects {
   status_bar?: boolean;
 }
 
+export interface ProfileDef {
+  name: string;
+  environment?: string;           // auto-activate this environment when profile is active
+  paths?: string[];               // auto-activate when CWD matches these paths
+  vars?: Record<string, string>;  // profile-specific template vars (merged over machine.vars)
+  env_overrides?: Record<string, string>; // override .env values per profile
+  description?: string;           // human-readable description
+}
+
 export interface Config {
   version: string;
   profile: string;
@@ -103,6 +112,7 @@ export interface Config {
   package_exclude?: string[];
   package_mappings?: Record<string, Record<string, string>>[];
   terminal_effects?: TerminalEffects;
+  profiles?: ProfileDef[];
 }
 
 // ---------------------------------------------------------------------------

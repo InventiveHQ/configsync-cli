@@ -94,9 +94,10 @@ function tierToFishColor(tier: string): string {
 /**
  * Returns complete shell hook code that:
  * - Reads ~/.configsync/active-env on each prompt
- * - Sets CONFIGSYNC_ENV and CONFIGSYNC_ENV_TIER env vars
- * - Adds a colored badge to the prompt
- * - Sets the terminal title
+ * - Reads ~/.configsync/active-profile and .configsync-profile (CWD walk) for profile switching
+ * - Sets CONFIGSYNC_ENV, CONFIGSYNC_ENV_TIER, and CONFIGSYNC_PROFILE env vars
+ * - Adds colored badges to the prompt (profile + environment)
+ * - Sets the terminal title (includes profile name)
  * - Handles env injection: on chpwd checks ~/.configsync/env_inject/*.json for CWD match
  * - Saves/restores the original PS1
  */
@@ -112,7 +113,7 @@ export function generateShellHook(shell: 'bash' | 'zsh' | 'fish'): string {
 }
 
 function zshHook(): string {
-  return `# ConfigSync environment hook (zsh)
+  return `# ConfigSync environment & profile hook (zsh)
 # Add to ~/.zshrc: eval "$(configsync shell-hook zsh)"
 
 _configsync_original_ps1="\${PS1}"
@@ -120,7 +121,34 @@ _configsync_original_ps1="\${PS1}"
 _configsync_update_env() {
   local env_file="\${HOME}/.configsync/active-env"
   local tier_file="\${HOME}/.configsync/active-env-tier"
+  local profile_file="\${HOME}/.configsync/active-profile"
 
+  # --- Profile resolution: .configsync-profile in CWD or parents takes priority ---
+  local local_profile=""
+  local check_dir="\${PWD}"
+  while [[ "\${check_dir}" != "/" ]]; do
+    if [[ -f "\${check_dir}/.configsync-profile" ]]; then
+      local_profile="$(< "\${check_dir}/.configsync-profile")"
+      break
+    fi
+    check_dir="$(dirname "\${check_dir}")"
+  done
+
+  if [[ -n "\${local_profile}" ]]; then
+    export CONFIGSYNC_PROFILE="\${local_profile}"
+  elif [[ -f "\${profile_file}" ]]; then
+    export CONFIGSYNC_PROFILE="$(< "\${profile_file}")"
+  else
+    unset CONFIGSYNC_PROFILE
+  fi
+
+  # --- Profile badge ---
+  local profile_badge=""
+  if [[ -n "\${CONFIGSYNC_PROFILE}" ]]; then
+    profile_badge="%F{cyan}[\${CONFIGSYNC_PROFILE}]%f "
+  fi
+
+  # --- Environment badge ---
   if [[ -f "\${env_file}" ]]; then
     export CONFIGSYNC_ENV="$(< "\${env_file}")"
     [[ -f "\${tier_file}" ]] && export CONFIGSYNC_ENV_TIER="$(< "\${tier_file}")"
@@ -134,11 +162,14 @@ _configsync_update_env() {
       *)           badge="%K{6}%F{0} \${label} %f%k " ;;
     esac
 
-    PS1="\${badge}\${_configsync_original_ps1}"
-    printf '\\e]2;configsync:%s\\a' "\${CONFIGSYNC_ENV}"
+    PS1="\${profile_badge}\${badge}\${_configsync_original_ps1}"
+    printf '\\e]2;configsync:%s(%s)\\a' "\${CONFIGSYNC_ENV}" "\${CONFIGSYNC_PROFILE}"
   else
     unset CONFIGSYNC_ENV CONFIGSYNC_ENV_TIER
-    PS1="\${_configsync_original_ps1}"
+    PS1="\${profile_badge}\${_configsync_original_ps1}"
+    if [[ -n "\${CONFIGSYNC_PROFILE}" ]]; then
+      printf '\\e]2;configsync:(%s)\\a' "\${CONFIGSYNC_PROFILE}"
+    fi
   fi
 }
 
@@ -152,16 +183,44 @@ chpwd_functions+=(_configsync_chpwd_inject)
 }
 
 function bashHook(): string {
-  return `# ConfigSync environment hook (bash)
+  return `# ConfigSync environment & profile hook (bash)
 # Add to ~/.bashrc: eval "$(configsync shell-hook bash)"
 
 _configsync_original_ps1="\${PS1}"
 _configsync_last_pwd=""
+_configsync_last_profile=""
 
 _configsync_prompt_command() {
   local env_file="\${HOME}/.configsync/active-env"
   local tier_file="\${HOME}/.configsync/active-env-tier"
+  local profile_file="\${HOME}/.configsync/active-profile"
 
+  # --- Profile resolution: .configsync-profile in CWD or parents takes priority ---
+  local local_profile=""
+  local check_dir="\${PWD}"
+  while [[ "\${check_dir}" != "/" ]]; do
+    if [[ -f "\${check_dir}/.configsync-profile" ]]; then
+      local_profile="$(< "\${check_dir}/.configsync-profile")"
+      break
+    fi
+    check_dir="$(dirname "\${check_dir}")"
+  done
+
+  if [[ -n "\${local_profile}" ]]; then
+    export CONFIGSYNC_PROFILE="\${local_profile}"
+  elif [[ -f "\${profile_file}" ]]; then
+    export CONFIGSYNC_PROFILE="$(< "\${profile_file}")"
+  else
+    unset CONFIGSYNC_PROFILE
+  fi
+
+  # --- Profile badge ---
+  local profile_badge=""
+  if [[ -n "\${CONFIGSYNC_PROFILE}" ]]; then
+    profile_badge="\\[\\e[36m\\][\${CONFIGSYNC_PROFILE}]\\[\\e[0m\\] "
+  fi
+
+  # --- Environment badge ---
   if [[ -f "\${env_file}" ]]; then
     export CONFIGSYNC_ENV="$(< "\${env_file}")"
     [[ -f "\${tier_file}" ]] && export CONFIGSYNC_ENV_TIER="$(< "\${tier_file}")"
@@ -175,16 +234,20 @@ _configsync_prompt_command() {
       *)           badge="\\[\\e[46;30m\\] \${label} \\[\\e[0m\\] " ;;
     esac
 
-    PS1="\${badge}\${_configsync_original_ps1}"
-    printf '\\e]2;configsync:%s\\a' "\${CONFIGSYNC_ENV}"
+    PS1="\${profile_badge}\${badge}\${_configsync_original_ps1}"
+    printf '\\e]2;configsync:%s(%s)\\a' "\${CONFIGSYNC_ENV}" "\${CONFIGSYNC_PROFILE}"
   else
     unset CONFIGSYNC_ENV CONFIGSYNC_ENV_TIER
-    PS1="\${_configsync_original_ps1}"
+    PS1="\${profile_badge}\${_configsync_original_ps1}"
+    if [[ -n "\${CONFIGSYNC_PROFILE}" ]]; then
+      printf '\\e]2;configsync:(%s)\\a' "\${CONFIGSYNC_PROFILE}"
+    fi
   fi
 
-  # Only run env injection when directory actually changes
-  if [[ "\${PWD}" != "\${_configsync_last_pwd}" ]]; then
+  # Only run env injection when directory or profile actually changes
+  if [[ "\${PWD}" != "\${_configsync_last_pwd}" || "\${CONFIGSYNC_PROFILE}" != "\${_configsync_last_profile}" ]]; then
     _configsync_last_pwd="\${PWD}"
+    _configsync_last_profile="\${CONFIGSYNC_PROFILE}"
     eval "$(configsync env vars --for-shell 2>/dev/null)"
   fi
 }
@@ -194,10 +257,30 @@ PROMPT_COMMAND="_configsync_prompt_command\${PROMPT_COMMAND:+;}\${PROMPT_COMMAND
 }
 
 function fishHook(): string {
-  return `# ConfigSync environment hook (fish)
+  return `# ConfigSync environment & profile hook (fish)
 # Add to ~/.config/fish/conf.d/configsync.fish
 
 set -g _configsync_original_fish_prompt (functions fish_prompt)
+
+function _configsync_resolve_profile
+  set -l profile_file "$HOME/.configsync/active-profile"
+
+  # Walk up looking for .configsync-profile
+  set -l check_dir $PWD
+  while test "$check_dir" != "/"
+    if test -f "$check_dir/.configsync-profile"
+      set -gx CONFIGSYNC_PROFILE (string trim (cat "$check_dir/.configsync-profile"))
+      return
+    end
+    set check_dir (dirname "$check_dir")
+  end
+
+  if test -f $profile_file
+    set -gx CONFIGSYNC_PROFILE (string trim (cat $profile_file))
+  else
+    set -e CONFIGSYNC_PROFILE
+  end
+end
 
 function _configsync_update_env --on-event fish_prompt
   set -l env_file "$HOME/.configsync/active-env"
@@ -210,11 +293,21 @@ function _configsync_update_env --on-event fish_prompt
     set -e CONFIGSYNC_ENV
     set -e CONFIGSYNC_ENV_TIER
   end
+
+  _configsync_resolve_profile
 end
 
 function fish_prompt
   _configsync_update_env
 
+  # Profile badge
+  if set -q CONFIGSYNC_PROFILE
+    set_color cyan
+    echo -n "[$CONFIGSYNC_PROFILE] "
+    set_color normal
+  end
+
+  # Environment badge
   if set -q CONFIGSYNC_ENV
     set -l label (string upper $CONFIGSYNC_ENV)
     switch $CONFIGSYNC_ENV_TIER
@@ -230,7 +323,9 @@ function fish_prompt
     echo -n " $label "
     set_color normal
     echo -n " "
-    printf '\\e]2;configsync:%s\\a' $CONFIGSYNC_ENV
+    printf '\\e]2;configsync:%s(%s)\\a' $CONFIGSYNC_ENV $CONFIGSYNC_PROFILE
+  else if set -q CONFIGSYNC_PROFILE
+    printf '\\e]2;configsync:(%s)\\a' $CONFIGSYNC_PROFILE
   end
 
   # Call original prompt
@@ -238,6 +333,7 @@ function fish_prompt
 end
 
 function _configsync_chpwd --on-variable PWD
+  _configsync_resolve_profile
   eval (configsync env vars --for-shell 2>/dev/null)
 end
 `;

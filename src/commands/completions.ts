@@ -8,7 +8,7 @@ _configsync_completions() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-  commands="init login logout add remove list push pull status scan secret completions sync doctor machine env"
+  commands="init login logout add remove list push pull status scan secret completions sync doctor machine env profile"
 
   case "\${prev}" in
     configsync)
@@ -37,6 +37,10 @@ _configsync_completions() {
       ;;
     env)
       COMPREPLY=( $(compgen -W "list create activate deactivate current shell hook delete vars" -- "\${cur}") )
+      return 0
+      ;;
+    profile)
+      COMPREPLY=( $(compgen -W "list create switch delete show set-path remove-path set-var set-env-override unset-var unset-env-override" -- "\${cur}") )
       return 0
       ;;
     pull)
@@ -79,7 +83,7 @@ _configsync_completions() {
   esac
 
   if [[ "\${cur}" == -* ]]; then
-    COMPREPLY=( $(compgen -W "--help --version --env" -- "\${cur}") )
+    COMPREPLY=( $(compgen -W "--help --version --env --profile" -- "\${cur}") )
   fi
 }
 complete -F _configsync_completions configsync
@@ -88,7 +92,7 @@ complete -F _configsync_completions configsync
 const zshCompletion = `
 # configsync zsh completion
 _configsync() {
-  local -a commands add_commands secret_commands machine_commands tag_commands var_commands env_commands
+  local -a commands add_commands secret_commands machine_commands tag_commands var_commands env_commands profile_commands
 
   commands=(
     'init:Initialize ConfigSync on this machine'
@@ -107,6 +111,7 @@ _configsync() {
     'doctor:Run system diagnostics'
     'machine:Manage machine tags and variables'
     'env:Manage environments (dev, staging, prod)'
+    'profile:Manage configuration profiles'
   )
 
   add_commands=(
@@ -152,6 +157,20 @@ _configsync() {
     'vars:Output export statements for current project'
   )
 
+  profile_commands=(
+    'list:List all profiles'
+    'create:Create a new profile'
+    'switch:Switch to a profile'
+    'delete:Delete a profile'
+    'show:Show profile details'
+    'set-path:Add a path to a profile'
+    'remove-path:Remove a path from a profile'
+    'set-var:Set a profile variable'
+    'set-env-override:Set a profile env override'
+    'unset-var:Remove a profile variable'
+    'unset-env-override:Remove a profile env override'
+  )
+
   if (( CURRENT == 2 )); then
     _describe 'command' commands
   elif (( CURRENT == 3 )); then
@@ -167,6 +186,9 @@ _configsync() {
         ;;
       env)
         _describe 'subcommand' env_commands
+        ;;
+      profile)
+        _describe 'subcommand' profile_commands
         ;;
       pull)
         _arguments \\

@@ -276,6 +276,7 @@ export function registerPushCommand(program: Command): void {
           modules: capturedModules,
           env_vars: capturedEnvVars,
           machine_vars: config.machine || null,
+          profiles: config.profiles || [],
         };
 
         const metadata = {
@@ -323,6 +324,14 @@ export function registerPushCommand(program: Command): void {
           env_vars: Object.keys(capturedEnvVars),
           machine_vars: config.machine || null,
           active_environment: activeEnvName || null,
+          profiles: (config.profiles || []).map((p: any) => ({
+            name: p.name,
+            environment: p.environment || null,
+            paths: p.paths || [],
+            vars: p.vars || {},
+            env_overrides: p.env_overrides ? Object.keys(p.env_overrides).reduce((acc: Record<string, string>, k: string) => { acc[k] = '***'; return acc; }, {}) : {},
+            description: p.description || null,
+          })),
         };
 
         if (config.sync.backend === 'cloud') {
