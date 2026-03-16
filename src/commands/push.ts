@@ -229,6 +229,15 @@ export function registerPushCommand(program: Command): void {
           capturedModules.push(capturedMod);
         }
 
+        // Capture tracked env vars
+        const capturedEnvVars: Record<string, string> = {};
+        for (const varName of config.env_vars || []) {
+          const value = process.env[varName];
+          if (value !== undefined) {
+            capturedEnvVars[varName] = value;
+          }
+        }
+
         const state: Record<string, any> = {
           timestamp: new Date().toISOString(),
           message: options.message || '',
@@ -239,6 +248,7 @@ export function registerPushCommand(program: Command): void {
           projects: capturedProjects,
           groups: capturedGroups,
           modules: capturedModules,
+          env_vars: capturedEnvVars,
         };
 
         const metadata = {
@@ -275,6 +285,7 @@ export function registerPushCommand(program: Command): void {
             files: m.files.map((f: any) => ({ path: f.path, encrypt: f.encrypt })),
             extras: m.extras || null,
           })),
+          env_vars: Object.keys(capturedEnvVars),
         };
 
         if (config.sync.backend === 'cloud') {

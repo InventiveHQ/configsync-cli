@@ -99,6 +99,7 @@ export interface Config {
   modules?: ModuleConfig[];
   machine?: MachineConfig;
   environments?: EnvironmentDef[];
+  env_vars?: string[];  // explicitly tracked env var names: ["GOPATH", "JAVA_HOME", ...]
   package_exclude?: string[];
   package_mappings?: Record<string, Record<string, string>>[];
   terminal_effects?: TerminalEffects;

@@ -106,6 +106,60 @@ const managers: PackageManagerDef[] = [
         .map(l => `snap:${l.split(/\s+/)[0]}`);
     },
   },
+  {
+    name: 'npm',
+    displayName: 'npm',
+    checkCmd: 'npm --version',
+    listCmd: 'npm list -g --depth=0 --json',
+    parseOutput: (output) => {
+      try {
+        const data = JSON.parse(output);
+        const deps = data.dependencies || {};
+        return Object.keys(deps).map(name => `npm:${name}`);
+      } catch {
+        return [];
+      }
+    },
+  },
+  {
+    name: 'pip',
+    displayName: 'pip',
+    checkCmd: 'pip3 --version',
+    listCmd: 'pip3 list --user --format=json',
+    parseOutput: (output) => {
+      try {
+        const packages: { name: string; version: string }[] = JSON.parse(output);
+        return packages.map(p => `pip:${p.name}`);
+      } catch {
+        return [];
+      }
+    },
+  },
+  {
+    name: 'cargo',
+    displayName: 'Cargo',
+    checkCmd: 'cargo --version',
+    listCmd: 'cargo install --list',
+    parseOutput: (output) => {
+      return output
+        .split('\n')
+        .filter(l => l.trim() && !/^\s/.test(l))
+        .map(l => `cargo:${l.split(' ')[0].trim()}`)
+        .filter(p => p !== 'cargo:');
+    },
+  },
+  {
+    name: 'pacman',
+    displayName: 'Pacman',
+    checkCmd: 'pacman --version',
+    listCmd: 'pacman -Qqe',
+    parseOutput: (output) => {
+      return output
+        .split('\n')
+        .filter(l => l.trim())
+        .map(l => `pacman:${l.trim()}`);
+    },
+  },
 ];
 
 function cmdExists(cmd: string): boolean {

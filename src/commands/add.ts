@@ -425,6 +425,78 @@ export function registerAddCommand(program: Command): void {
       if (!exists) console.log(chalk.yellow(`  Warning: ${envFile} does not exist yet`));
       if (options.encrypt) console.log(chalk.dim('  (will be encrypted)'));
     });
+
+  // configsync add env-var <name> — track a specific environment variable
+  addCmd
+    .command('env-var [name]')
+    .description('Track an environment variable (or list detected dev vars)')
+    .action(async (name?: string) => {
+      const configManager = new ConfigManager();
+      ensureInit(configManager);
+      const config = configManager.load();
+      if (!config.env_vars) config.env_vars = [];
+
+      if (!name) {
+        // Show detected dev vars
+        const { detectDevEnvVars } = await import('../lib/envvars.js');
+        const detected = detectDevEnvVars();
+
+        if (detected.length === 0) {
+          console.log(chalk.dim('No common dev environment variables detected.'));
+          return;
+        }
+
+        console.log(chalk.bold('Detected dev environment variables:\n'));
+        for (const v of detected) {
+          const tracked = config.env_vars.includes(v.name);
+          const status = tracked ? chalk.dim(' (tracked)') : '';
+          const val = v.value.length > 50 ? v.value.slice(0, 50) + '...' : v.value;
+          console.log(`  ${chalk.cyan(v.name)}${status}`);
+          console.log(chalk.dim(`    = ${val}`));
+        }
+        console.log(chalk.dim(`\nTrack with: configsync add env-var <NAME>`));
+        console.log(chalk.dim(`Track all:  configsync add env-var --all`));
+        return;
+      }
+
+      // --all flag: add all detected dev vars
+      if (name === '--all') {
+        const { detectDevEnvVars } = await import('../lib/envvars.js');
+        const detected = detectDevEnvVars();
+        let added = 0;
+        for (const v of detected) {
+          if (!config.env_vars.includes(v.name)) {
+            config.env_vars.push(v.name);
+            console.log(chalk.green(`  + ${v.name}`));
+            added++;
+          }
+        }
+        if (added > 0) {
+          configManager.save(config);
+          console.log(chalk.green(`\nAdded ${added} environment variable${added !== 1 ? 's' : ''}`));
+        } else {
+          console.log(chalk.dim('All detected vars already tracked.'));
+        }
+        return;
+      }
+
+      // Add specific var
+      if (config.env_vars.includes(name)) {
+        console.error(chalk.red(`'${name}' is already tracked.`));
+        process.exit(1);
+      }
+
+      config.env_vars.push(name);
+      configManager.save(config);
+
+      const value = process.env[name];
+      console.log(chalk.green(`Added env var: ${name}`));
+      if (value) {
+        console.log(chalk.dim(`  Current value: ${value.length > 60 ? value.slice(0, 60) + '...' : value}`));
+      } else {
+        console.log(chalk.yellow(`  Warning: ${name} is not currently set in this shell`));
+      }
+    });
 }
 
 function resolveHome(p: string): string {
