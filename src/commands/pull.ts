@@ -14,14 +14,81 @@ function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
 }
 
+function cloneOrPullRepo(
+  repo: { url: string; branch?: string },
+  repoPath: string,
+  stats: { cloned: number; updated: number },
+  warnings: string[],
+): void {
+  if (!fs.existsSync(repoPath)) {
+    // Clone
+    try {
+      fs.mkdirSync(path.dirname(repoPath), { recursive: true });
+      execSync(`git clone ${repo.url} ${repoPath}`, {
+        stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000,
+      });
+      if (repo.branch && repo.branch !== 'main' && repo.branch !== 'master') {
+        execSync(`git checkout ${repo.branch}`, {
+          cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      }
+      stats.cloned++;
+    } catch (err: any) {
+      warnings.push(`Failed to clone ${repo.url}: ${err.message}`);
+    }
+  } else if (fs.existsSync(path.join(repoPath, '.git'))) {
+    // Already exists — git pull
+    try {
+      execSync('git pull', {
+        cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'], timeout: 60000,
+      });
+      stats.updated++;
+    } catch {
+      warnings.push(`Failed to pull ${repoPath}`);
+    }
+  }
+}
+
+function restoreFiles(
+  files: any[],
+  basePath: string,
+  cryptoManager: CryptoManager,
+  backupDir: string,
+  force: boolean,
+  mode?: number,
+): number {
+  let count = 0;
+  for (const file of files) {
+    const filePath = path.join(basePath, file.filename);
+    if (fs.existsSync(filePath) && !force) {
+      const backupName = `${file.filename}.${Date.now()}.bak`;
+      fs.copyFileSync(filePath, path.join(backupDir, backupName));
+    }
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    let content: Buffer = Buffer.from(file.content, 'base64');
+    if (file.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
+    fs.writeFileSync(filePath, content, mode ? { mode } : undefined);
+    count++;
+  }
+  return count;
+}
+
 export function registerPullCommand(program: Command): void {
   program
     .command('pull')
     .description('Pull and restore state from sync backend')
     .option('--force', 'overwrite existing files without backup', false)
     .option('--from <machine>', 'pull from a specific machine (name or ID)')
+    .option('--group <name>', 'only pull a specific project group')
+    .option('--project <name>', 'only pull a specific project')
     .option('--list-machines', 'list available machines to pull from')
-    .action(async (options: { force: boolean; from?: string; listMachines?: boolean }) => {
+    .action(async (options: {
+      force: boolean;
+      from?: string;
+      group?: string;
+      project?: string;
+      listMachines?: boolean;
+    }) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -51,7 +118,6 @@ export function registerPullCommand(program: Command): void {
 
           const backend = new CloudBackend(apiUrl, apiKey);
 
-          // Handle --list-machines flag
           if (options.listMachines) {
             spinner.stop();
             const machines = await backend.listMachines();
@@ -66,7 +132,6 @@ export function registerPullCommand(program: Command): void {
             process.exit(0);
           }
 
-          // Resolve --from flag to a machine_id
           let pullFromMachineId: string | undefined;
           if (options.from) {
             const machines = await backend.listMachines();
@@ -103,153 +168,102 @@ export function registerPullCommand(program: Command): void {
 
         spinner.text = 'Restoring...';
 
+        const repoStats = { cloned: 0, updated: 0 };
         let configsRestored = 0;
-        let reposCloned = 0;
-        let reposUpdated = 0;
         let envsRestored = 0;
+        let projectsRestored = 0;
+        let groupsRestored = 0;
         const warnings: string[] = [];
 
-        // Restore config files
-        for (const entry of state.configs || []) {
-          const resolvedPath = resolveHome(entry.source);
+        const filterGroup = options.group?.toLowerCase();
+        const filterProject = options.project?.toLowerCase();
+        const isFiltered = !!(filterGroup || filterProject);
 
-          if (fs.existsSync(resolvedPath) && !options.force) {
-            const backupName = `${path.basename(resolvedPath)}.${Date.now()}.bak`;
-            fs.copyFileSync(resolvedPath, path.join(configManager.backupDir, backupName));
-          }
-
-          fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-          let content: Buffer = Buffer.from(entry.content, 'base64');
-          if (entry.encrypted) {
-            content = Buffer.from(cryptoManager.decrypt(content));
-          }
-          fs.writeFileSync(resolvedPath, content);
-          configsRestored++;
-        }
-
-        // Restore repos (clone or update)
-        for (const repo of state.repos || []) {
-          const repoPath = resolveHome(repo.path);
-
-          if (!fs.existsSync(repoPath)) {
-            // Clone
-            try {
-              fs.mkdirSync(path.dirname(repoPath), { recursive: true });
-              execSync(`git clone ${repo.url} ${repoPath}`, {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                timeout: 120000,
-              });
-              if (repo.branch && repo.branch !== 'main' && repo.branch !== 'master') {
-                execSync(`git checkout ${repo.branch}`, {
-                  cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'],
-                });
-              }
-              reposCloned++;
-            } catch (err: any) {
-              warnings.push(`Failed to clone ${repo.url}: ${err.message}`);
+        // If filtering by group/project, skip standalone items
+        if (!isFiltered) {
+          // Restore standalone config files
+          for (const entry of state.configs || []) {
+            const resolvedPath = resolveHome(entry.source);
+            if (fs.existsSync(resolvedPath) && !options.force) {
+              fs.copyFileSync(resolvedPath, path.join(configManager.backupDir, `${path.basename(resolvedPath)}.${Date.now()}.bak`));
             }
-          } else if (repo.auto_pull !== false && fs.existsSync(path.join(repoPath, '.git'))) {
-            // Pull latest
-            try {
-              execSync('git pull', {
-                cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'], timeout: 60000,
-              });
-              reposUpdated++;
-            } catch {
-              warnings.push(`Failed to pull ${repoPath}`);
+            fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+            let content: Buffer = Buffer.from(entry.content, 'base64');
+            if (entry.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
+            fs.writeFileSync(resolvedPath, content);
+            configsRestored++;
+          }
+
+          // Restore standalone repos
+          for (const repo of state.repos || []) {
+            cloneOrPullRepo(repo, resolveHome(repo.path), repoStats, warnings);
+            if (repo.has_uncommitted) {
+              warnings.push(`${repo.path} had uncommitted changes on source machine`);
             }
           }
 
-          if (repo.has_uncommitted) {
-            warnings.push(`${repo.path} had uncommitted changes on source machine`);
+          // Restore standalone env files
+          for (const env of state.env_files || []) {
+            const envPath = path.join(resolveHome(env.project_path), env.filename || '.env.local');
+            if (fs.existsSync(envPath) && !options.force) {
+              fs.copyFileSync(envPath, path.join(configManager.backupDir, `${path.basename(envPath)}.${Date.now()}.bak`));
+            }
+            fs.mkdirSync(path.dirname(envPath), { recursive: true });
+            let content: Buffer = Buffer.from(env.content, 'base64');
+            if (env.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
+            fs.writeFileSync(envPath, content, { mode: 0o600 });
+            envsRestored++;
           }
         }
 
-        // Restore env files
-        for (const env of state.env_files || []) {
-          const envPath = path.join(resolveHome(env.project_path), env.filename || '.env.local');
+        // Restore standalone projects (if not filtering by group, or if project name matches)
+        if (!filterGroup) {
+          for (const project of state.projects || []) {
+            if (filterProject && !project.name.toLowerCase().includes(filterProject)) continue;
 
-          if (fs.existsSync(envPath) && !options.force) {
-            const backupName = `${path.basename(envPath)}.${Date.now()}.bak`;
-            fs.copyFileSync(envPath, path.join(configManager.backupDir, backupName));
+            const projectPath = resolveHome(project.path);
+            if (project.repo?.url) {
+              cloneOrPullRepo(project.repo, projectPath, repoStats, warnings);
+            }
+            restoreFiles(project.secrets || [], projectPath, cryptoManager, configManager.backupDir, options.force, 0o600);
+            restoreFiles(project.configs || [], projectPath, cryptoManager, configManager.backupDir, options.force);
+            projectsRestored++;
           }
-
-          fs.mkdirSync(path.dirname(envPath), { recursive: true });
-          let content: Buffer = Buffer.from(env.content, 'base64');
-          if (env.encrypted) {
-            content = Buffer.from(cryptoManager.decrypt(content));
-          }
-          fs.writeFileSync(envPath, content, { mode: 0o600 });
-          envsRestored++;
         }
 
-        // Restore projects
-        let projectsRestored = 0;
-        for (const project of state.projects || []) {
-          const projectPath = resolveHome(project.path);
+        // Restore groups
+        for (const group of state.groups || []) {
+          if (filterGroup && !group.name.toLowerCase().includes(filterGroup)) continue;
 
-          // Clone repo if needed
-          if (project.repo?.url && !fs.existsSync(projectPath)) {
-            try {
-              fs.mkdirSync(path.dirname(projectPath), { recursive: true });
-              execSync(`git clone ${project.repo.url} ${projectPath}`, {
-                stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000,
-              });
-              if (project.repo.branch && project.repo.branch !== 'main' && project.repo.branch !== 'master') {
-                execSync(`git checkout ${project.repo.branch}`, {
-                  cwd: projectPath, stdio: ['pipe', 'pipe', 'pipe'],
-                });
-              }
-            } catch (err: any) {
-              warnings.push(`Failed to clone ${project.repo.url}: ${err.message}`);
-              continue;
+          for (const project of group.projects || []) {
+            if (filterProject && !project.name.toLowerCase().includes(filterProject)) continue;
+
+            const projectPath = resolveHome(project.path);
+            if (project.repo?.url) {
+              cloneOrPullRepo(project.repo, projectPath, repoStats, warnings);
             }
+            restoreFiles(project.secrets || [], projectPath, cryptoManager, configManager.backupDir, options.force, 0o600);
+            restoreFiles(project.configs || [], projectPath, cryptoManager, configManager.backupDir, options.force);
+            projectsRestored++;
           }
-
-          // Restore secrets
-          for (const secret of project.secrets || []) {
-            const filePath = path.join(projectPath, secret.filename);
-            if (fs.existsSync(filePath) && !options.force) {
-              const backupName = `${secret.filename}.${Date.now()}.bak`;
-              fs.copyFileSync(filePath, path.join(configManager.backupDir, backupName));
-            }
-            fs.mkdirSync(path.dirname(filePath), { recursive: true });
-            let content: Buffer = Buffer.from(secret.content, 'base64');
-            if (secret.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
-            fs.writeFileSync(filePath, content, { mode: 0o600 });
-          }
-
-          // Restore configs
-          for (const cfg of project.configs || []) {
-            const filePath = path.join(projectPath, cfg.filename);
-            if (fs.existsSync(filePath) && !options.force) {
-              const backupName = `${cfg.filename}.${Date.now()}.bak`;
-              fs.copyFileSync(filePath, path.join(configManager.backupDir, backupName));
-            }
-            fs.mkdirSync(path.dirname(filePath), { recursive: true });
-            let content: Buffer = Buffer.from(cfg.content, 'base64');
-            if (cfg.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
-            fs.writeFileSync(filePath, content);
-          }
-
-          projectsRestored++;
+          groupsRestored++;
         }
 
         // Build summary
         const parts: string[] = [];
         if (configsRestored) parts.push(`${configsRestored} config${configsRestored !== 1 ? 's' : ''}`);
-        if (reposCloned) parts.push(`${reposCloned} repo${reposCloned !== 1 ? 's' : ''} cloned`);
-        if (reposUpdated) parts.push(`${reposUpdated} repo${reposUpdated !== 1 ? 's' : ''} updated`);
+        if (repoStats.cloned) parts.push(`${repoStats.cloned} repo${repoStats.cloned !== 1 ? 's' : ''} cloned`);
+        if (repoStats.updated) parts.push(`${repoStats.updated} repo${repoStats.updated !== 1 ? 's' : ''} updated`);
         if (envsRestored) parts.push(`${envsRestored} env file${envsRestored !== 1 ? 's' : ''}`);
         if (projectsRestored) parts.push(`${projectsRestored} project${projectsRestored !== 1 ? 's' : ''}`);
+        if (groupsRestored) parts.push(`${groupsRestored} group${groupsRestored !== 1 ? 's' : ''}`);
 
         spinner.succeed(`Restored! (${parts.join(', ') || 'no changes'})`);
 
         if (state.timestamp) console.log(`  ${chalk.dim('Snapshot from:')} ${state.timestamp}`);
         if (state.message) console.log(`  ${chalk.dim('Message:')} ${state.message}`);
 
-        // Show package info if available
-        if (state.packages?.length) {
+        if (state.packages?.length && !isFiltered) {
           const totalPkgs = state.packages.reduce((s: number, m: any) => s + m.packages.length, 0);
           console.log(`\n  ${chalk.dim('Packages:')} ${totalPkgs} packages from ${state.packages.length} manager(s)`);
           console.log(chalk.dim('  Run "configsync scan" to compare with this machine'));

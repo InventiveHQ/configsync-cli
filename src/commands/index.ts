@@ -8,6 +8,7 @@ import { registerPullCommand } from './pull.js';
 import { registerStatusCommand } from './status.js';
 import { registerSecretCommand } from './secret.js';
 import { registerScanCommand } from './scan.js';
+import { registerCompletionsCommand } from './completions.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -19,4 +20,5 @@ export function registerCommands(program: Command): void {
   registerPullCommand(program);
   registerStatusCommand(program);
   registerSecretCommand(program);
+  registerCompletionsCommand(program);
 }
