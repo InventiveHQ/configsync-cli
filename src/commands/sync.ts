@@ -19,17 +19,22 @@ async function confirm(question: string): Promise<boolean> {
 
 function describeAction(action: any): string {
   const payload = action.payload || {};
-  switch (action.type) {
+  switch (action.action) {
     case 'add_module':
-      return `Add module ${chalk.cyan(payload.name)}`;
+      return `Add module: ${chalk.cyan(payload.name)}`;
     case 'remove_module':
-      return `Remove module ${chalk.cyan(payload.name)}`;
-    case 'add_package':
-      return `Add package ${chalk.cyan(payload.package)} to ${chalk.cyan(payload.manager)}`;
-    case 'remove_package':
-      return `Remove package ${chalk.cyan(payload.package)} from ${chalk.cyan(payload.manager)}`;
+      return `Remove module: ${chalk.cyan(payload.name)}`;
+    case 'add_package': {
+      const pkg = payload.item || payload.package;
+      return `Add package: ${chalk.cyan(pkg)}`;
+    }
+    case 'remove_package': {
+      const pkg = payload.item || payload.package;
+      const name = pkg?.includes(':') ? pkg.split(':').slice(1).join(':') : pkg;
+      return `Remove package: ${chalk.cyan(name)}`;
+    }
     default:
-      return `Unknown action: ${action.type}`;
+      return `Unknown action: ${action.action}`;
   }
 }
 
@@ -99,7 +104,7 @@ export function registerSyncCommand(program: Command): void {
       for (const action of actions) {
         const payload = action.payload || {};
 
-        switch (action.type) {
+        switch (action.action) {
           case 'add_module': {
             const mod = getModule(payload.name);
             if (!mod) {
@@ -154,20 +159,22 @@ export function registerSyncCommand(program: Command): void {
               break;
             }
 
+            // Dashboard sends { item: "brew:git" }, normalize
+            const pkgItem = payload.item || payload.package;
             let removed = false;
             for (const pkgList of config.packages) {
-              if (payload.manager && pkgList.manager !== payload.manager) continue;
-              const pkgIdx = pkgList.packages.indexOf(payload.package);
+              const pkgIdx = pkgList.packages.indexOf(pkgItem);
               if (pkgIdx !== -1) {
                 pkgList.packages.splice(pkgIdx, 1);
-                console.log(chalk.green(`  Removed ${chalk.bold(payload.package)} from ${pkgList.displayName}`));
+                const displayName = pkgItem.includes(':') ? pkgItem.split(':').slice(1).join(':') : pkgItem;
+                console.log(chalk.green(`  Removed ${chalk.bold(displayName)} from ${pkgList.displayName}`));
                 removed = true;
                 break;
               }
             }
 
             if (!removed) {
-              console.log(chalk.dim(`  Package "${payload.package}" not found, skipping.`));
+              console.log(chalk.dim(`  Package "${pkgItem}" not found, skipping.`));
             } else {
               applied++;
             }
@@ -213,7 +220,7 @@ export function registerSyncCommand(program: Command): void {
           }
 
           default:
-            console.log(chalk.yellow(`  Unknown action type: ${action.type}`));
+            console.log(chalk.yellow(`  Unknown action type: ${action.action}`));
         }
       }
 
