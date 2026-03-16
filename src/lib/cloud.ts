@@ -82,8 +82,11 @@ class CloudBackend {
     }
   }
 
-  async pull(cryptoManager: any): Promise<Record<string, any> | null> {
-    const response = await this.request('GET', '/api/machines/latest');
+  async pull(cryptoManager: any, machineId?: string): Promise<Record<string, any> | null> {
+    const url = machineId
+      ? `/api/machines/latest?machine_id=${machineId}`
+      : '/api/machines/latest';
+    const response = await this.request('GET', url);
 
     if (response.status === 404) {
       return null;

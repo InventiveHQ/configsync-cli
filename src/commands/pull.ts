@@ -19,7 +19,9 @@ export function registerPullCommand(program: Command): void {
     .command('pull')
     .description('Pull and restore state from sync backend')
     .option('--force', 'overwrite existing files without backup', false)
-    .action(async (options: { force: boolean }) => {
+    .option('--from <machine>', 'pull from a specific machine (name or ID)')
+    .option('--list-machines', 'list available machines to pull from')
+    .action(async (options: { force: boolean; from?: string; listMachines?: boolean }) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -48,7 +50,45 @@ export function registerPullCommand(program: Command): void {
           }
 
           const backend = new CloudBackend(apiUrl, apiKey);
-          state = await backend.pull(cryptoManager);
+
+          // Handle --list-machines flag
+          if (options.listMachines) {
+            spinner.stop();
+            const machines = await backend.listMachines();
+            if (machines.length === 0) {
+              console.log(chalk.dim('No machines found.'));
+            } else {
+              console.log(chalk.bold('Available machines:\n'));
+              for (const m of machines) {
+                console.log(`  ${m.name} ${chalk.dim(`(${m.machine_id})`)}`);
+              }
+            }
+            process.exit(0);
+          }
+
+          // Resolve --from flag to a machine_id
+          let pullFromMachineId: string | undefined;
+          if (options.from) {
+            const machines = await backend.listMachines();
+            const match = machines.find((m: any) =>
+              m.machine_id === options.from ||
+              m.name.toLowerCase().includes(options.from!.toLowerCase())
+            );
+            if (!match) {
+              spinner.fail(`Machine "${options.from}" not found.`);
+              if (machines.length > 0) {
+                console.log(chalk.dim('\nAvailable machines:'));
+                for (const m of machines) {
+                  console.log(chalk.dim(`  - ${m.name} (${m.machine_id})`));
+                }
+              }
+              process.exit(1);
+            }
+            pullFromMachineId = match.machine_id;
+            spinner.text = `Pulling from ${match.name}...`;
+          }
+
+          state = await backend.pull(cryptoManager, pullFromMachineId);
         } else {
           const stateFile = path.join(configManager.stateDir, 'state.json');
           if (fs.existsSync(stateFile)) {
