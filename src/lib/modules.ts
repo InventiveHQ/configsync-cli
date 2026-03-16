@@ -210,6 +210,76 @@ const modules: ModuleDef[] = [
       appSupportFile('Cursor/User/keybindings.json', false),
     ],
   },
+  {
+    name: 'wrangler',
+    displayName: 'Wrangler (Cloudflare)',
+    description: 'Cloudflare Wrangler CLI config and authentication',
+    detect: () => {
+      // Wrangler stores config in ~/.wrangler or via `wrangler` command
+      const wranglerDir = path.join(os.homedir(), '.wrangler');
+      const configDir = path.join(os.homedir(), '.config', '.wrangler');
+      let cmdExists = false;
+      try {
+        execSync('wrangler --version', { stdio: 'pipe', timeout: 5000 });
+        cmdExists = true;
+      } catch {}
+      return fs.existsSync(wranglerDir) || fs.existsSync(configDir) || cmdExists;
+    },
+    getFiles: () => {
+      const files: ModuleFile[] = [];
+
+      // Auth config (contains OAuth tokens — must encrypt)
+      const wranglerDir = path.join(os.homedir(), '.wrangler');
+      const configDir = path.join(os.homedir(), '.config', '.wrangler');
+
+      // Wrangler stores auth in different places depending on version
+      const authPaths = [
+        '.wrangler/config/default.toml',
+        '.config/.wrangler/config/default.toml',
+      ];
+      for (const p of authPaths) {
+        const full = path.join(os.homedir(), p);
+        if (fs.existsSync(full)) {
+          files.push(homeFile(p, true));  // encrypt — contains OAuth tokens
+        }
+      }
+
+      // Also check for legacy wrangler.toml in home (global config)
+      if (fs.existsSync(path.join(os.homedir(), '.wrangler.toml'))) {
+        files.push(homeFile('.wrangler.toml', true));
+      }
+
+      return files;
+    },
+  },
+  {
+    name: 'aws',
+    displayName: 'AWS CLI',
+    description: 'AWS CLI config and credentials',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.aws')),
+    getFiles: () => [
+      homeFile('.aws/config', false),
+      homeFile('.aws/credentials', true),  // encrypt — contains secret keys
+    ],
+  },
+  {
+    name: 'npm',
+    displayName: 'npm',
+    description: 'npm config and auth tokens',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.npmrc')),
+    getFiles: () => [
+      homeFile('.npmrc', true),  // encrypt — may contain auth tokens
+    ],
+  },
+  {
+    name: 'docker',
+    displayName: 'Docker',
+    description: 'Docker config and auth',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.docker')),
+    getFiles: () => [
+      homeFile('.docker/config.json', true),  // encrypt — contains registry auth
+    ],
+  },
 ];
 
 export function listModules(): ModuleInfo[] {
