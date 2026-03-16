@@ -1,6 +1,6 @@
 {
   "name": "@inventivehq/configsync",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Sync development environments across machines - configs, secrets, env vars, and more",
   "type": "module",
   "bin": {

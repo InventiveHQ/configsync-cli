@@ -205,6 +205,36 @@ export function registerPushCommand(program: Command): void {
           capturedGroups.push(capturedGroup);
         }
 
+        // Capture modules
+        const capturedModules: Record<string, any>[] = [];
+        for (const mod of config.modules || []) {
+          const capturedMod: Record<string, any> = {
+            name: mod.name,
+            files: [],
+            extras: mod.extras || null,
+          };
+
+          for (const file of mod.files) {
+            const filePath = file.path.replace(/^~/, os.homedir());
+            const resolvedPath = path.resolve(filePath);
+            if (!fs.existsSync(resolvedPath)) continue;
+            if (!fs.statSync(resolvedPath).isFile()) continue;
+
+            let content: Buffer = Buffer.from(fs.readFileSync(resolvedPath));
+            if (file.encrypt) {
+              content = Buffer.from(cryptoManager.encrypt(content));
+            }
+
+            capturedMod.files.push({
+              path: file.path,
+              content: content.toString('base64'),
+              encrypted: file.encrypt,
+            });
+          }
+
+          capturedModules.push(capturedMod);
+        }
+
         const state: Record<string, any> = {
           timestamp: new Date().toISOString(),
           message: options.message || '',
@@ -214,6 +244,7 @@ export function registerPushCommand(program: Command): void {
           packages: config.packages || [],
           projects: capturedProjects,
           groups: capturedGroups,
+          modules: capturedModules,
         };
 
         const metadata = {
@@ -245,6 +276,11 @@ export function registerPushCommand(program: Command): void {
               configs: p.configs,
             })),
           })),
+          modules: (config.modules || []).map((m: any) => ({
+            name: m.name,
+            files: m.files.map((f: any) => ({ path: f.path, encrypt: f.encrypt })),
+            extras: m.extras || null,
+          })),
         };
 
         if (config.sync.backend === 'cloud') {
@@ -270,6 +306,7 @@ export function registerPushCommand(program: Command): void {
           `${capturedEnvFiles.length} env file${capturedEnvFiles.length !== 1 ? 's' : ''}`,
           `${capturedProjects.length} project${capturedProjects.length !== 1 ? 's' : ''}`,
           `${capturedGroups.length} group${capturedGroups.length !== 1 ? 's' : ''}`,
+          `${capturedModules.length} module${capturedModules.length !== 1 ? 's' : ''}`,
         ].filter(p => !p.startsWith('0'));
 
         spinner.succeed(`State pushed! (${parts.join(', ')})`);

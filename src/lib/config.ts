@@ -51,6 +51,12 @@ export interface ProjectConfig {
   configs: string[];      // regular dotfiles: [".eslintrc.json", ".env.example"]
 }
 
+export interface ModuleConfig {
+  name: string;              // e.g. "ssh", "vscode", "claude-code"
+  files: { path: string; encrypt: boolean }[];
+  extras?: Record<string, any>;
+}
+
 export interface GroupConfig {
   name: string;              // e.g. "micro_sites", "configsync"
   path: string;              // e.g. "~/git/micro_sites"
@@ -68,6 +74,7 @@ export interface Config {
   packages?: PackageList[];
   projects?: ProjectConfig[];
   groups?: GroupConfig[];
+  modules?: ModuleConfig[];
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { ConfigManager, ProjectConfig, GroupConfig } from '../lib/config.js';
+import { ConfigManager, ProjectConfig, GroupConfig, ModuleConfig } from '../lib/config.js';
+import { listModules, getModule, getAvailableModuleNames } from '../lib/modules.js';
 
 export function registerAddCommand(program: Command): void {
   const addCmd = program
@@ -234,6 +235,88 @@ export function registerAddCommand(program: Command): void {
       } else {
         console.log(chalk.yellow('\nNo git repos found in subdirectories.'));
       }
+    });
+
+  // configsync add module [name] — add a known tool module
+  addCmd
+    .command('module [name]')
+    .description('Add a known tool module (ssh, vscode, claude-desktop, claude-code, git, zsh, vim, cursor)')
+    .action(async (name?: string) => {
+      const configManager = new ConfigManager();
+      ensureInit(configManager);
+      const config = configManager.load();
+      if (!config.modules) config.modules = [];
+
+      // If no name, show detected modules
+      if (!name) {
+        const allModules = listModules();
+        const detected = allModules.filter(m => m.detected);
+        const notDetected = allModules.filter(m => !m.detected);
+
+        if (detected.length > 0) {
+          console.log(chalk.bold('Detected on this machine:\n'));
+          for (const m of detected) {
+            const already = config.modules.find(cm => cm.name === m.name);
+            const status = already ? chalk.dim(' (already added)') : '';
+            console.log(`  ${chalk.green(m.displayName)}${status} — ${m.description}`);
+            console.log(chalk.dim(`    configsync add module ${m.name}`));
+            if (m.files.length > 0) {
+              console.log(chalk.dim(`    ${m.files.length} files found`));
+            }
+            console.log('');
+          }
+        }
+
+        if (notDetected.length > 0) {
+          console.log(chalk.dim('Not detected:'));
+          for (const m of notDetected) {
+            console.log(chalk.dim(`  ${m.displayName} — ${m.description}`));
+          }
+        }
+        return;
+      }
+
+      // Add specific module
+      const mod = getModule(name);
+      if (!mod) {
+        console.error(chalk.red(`Unknown module '${name}'.`));
+        console.log(chalk.dim(`Available: ${getAvailableModuleNames().join(', ')}`));
+        process.exit(1);
+      }
+
+      if (!mod.detected) {
+        console.error(chalk.yellow(`${mod.displayName} not detected on this machine.`));
+        process.exit(1);
+      }
+
+      if (config.modules.find(m => m.name === mod.name)) {
+        console.error(chalk.red(`Module '${mod.displayName}' is already added.`));
+        process.exit(1);
+      }
+
+      const existingFiles = mod.files.filter(f => f.exists);
+
+      const moduleConfig: ModuleConfig = {
+        name: mod.name,
+        files: existingFiles.map(f => ({ path: f.relative, encrypt: f.encrypt })),
+      };
+
+      if (mod.extras) {
+        moduleConfig.extras = mod.extras;
+      }
+
+      config.modules.push(moduleConfig);
+      configManager.save(config);
+
+      console.log(chalk.green(`Added module: ${mod.displayName}\n`));
+      for (const f of existingFiles) {
+        const icon = f.encrypt ? '🔒' : '📄';
+        console.log(`  ${icon} ${f.relative}`);
+      }
+      if (mod.extras?.extensions) {
+        console.log(`\n  ${chalk.dim(`${mod.extras.extensions.length} VS Code extensions tracked`)}`);
+      }
+      console.log(chalk.dim(`\n${existingFiles.length} files will be synced.`));
     });
 
   // configsync add config <path>
