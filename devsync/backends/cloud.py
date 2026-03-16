@@ -3,6 +3,7 @@
 import json
 import base64
 import hashlib
+import platform
 from typing import Optional, Dict
 from pathlib import Path
 import httpx
@@ -143,7 +144,7 @@ class CloudBackend:
                 json=payload
             )
 
-            if response.status_code != 200:
+            if response.status_code not in (200, 201):
                 raise Exception(f"Registration failed: {response.status_code}")
 
             return response.json()

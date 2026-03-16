@@ -27,7 +27,7 @@ def cli(ctx):
 @cli.command()
 @click.option('--profile', default='default', help='Profile name')
 @click.option('--sync-backend', default='local',
-              type=click.Choice(['local', 's3', 'github', 'dropbox']),
+              type=click.Choice(['local', 'cloud', 's3', 'github', 'dropbox']),
               help='Sync backend to use')
 @click.option('--secret-provider', default='builtin',
               type=click.Choice(['builtin', 'keyring', '1password', 'bitwarden']),
@@ -48,6 +48,57 @@ def init(ctx, profile, sync_backend, secret_provider):
         console.print(f"🔐 Secret provider: {secret_provider}")
         console.print(f"☁️  Sync backend: {sync_backend}")
 
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--token', prompt=False, default=None, help='API token from configsync.dev dashboard')
+@click.option('--api-url', default='https://configsync.dev', help='API URL')
+@click.pass_context
+def login(ctx, token, api_url):
+    """Authenticate with ConfigSync cloud"""
+    ds = ctx.obj['devsync']
+
+    if not token:
+        token = click.prompt('API token (from configsync.dev/settings)', hide_input=True)
+
+    try:
+        from .backends.cloud import CloudAuthenticator
+        if not CloudAuthenticator.verify_token(token, api_url):
+            console.print("[red]Error:[/red] Invalid or expired token")
+            sys.exit(1)
+
+        # Store token in config
+        config = ds.load_config()
+        config['sync']['backend'] = 'cloud'
+        config['sync']['config']['api_url'] = api_url
+        config['sync']['config']['api_key'] = token
+        ds.save_config(config)
+
+        console.print("✅ Authenticated successfully!")
+        console.print(f"  Backend set to: cloud ({api_url})")
+    except FileNotFoundError:
+        console.print("[red]Error:[/red] Run 'devsync init' first")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.pass_context
+def logout(ctx):
+    """Remove stored credentials"""
+    ds = ctx.obj['devsync']
+
+    try:
+        config = ds.load_config()
+        config['sync']['config'].pop('api_key', None)
+        config['sync']['backend'] = 'local'
+        ds.save_config(config)
+        console.print("✅ Logged out. Backend reset to local.")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)

@@ -461,6 +461,19 @@ class DevSync:
         if current_branch != repo_state["branch"]:
             subprocess.run(["git", "checkout", repo_state["branch"]], check=True)
 
+    def _get_cloud_backend(self, config: dict):
+        """Create a CloudBackend instance from config"""
+        from .backends.cloud import CloudBackend
+
+        sync_config = config["sync"]["config"]
+        api_url = sync_config.get("api_url", "https://configsync.dev")
+        api_key = sync_config.get("api_key")
+
+        if not api_key:
+            raise ValueError("Not logged in. Run 'devsync login --token <your-token>' first.")
+
+        return CloudBackend(api_url, api_key)
+
     def _save_state(self, state: dict, config: dict):
         """Save state to configured backend"""
         backend = config["sync"]["backend"]
@@ -472,8 +485,12 @@ class DevSync:
             with open(state_file, 'w') as f:
                 json.dump(state, f, indent=2)
 
+        elif backend == "cloud":
+            cloud = self._get_cloud_backend(config)
+            cloud.register_machine()
+            cloud.push(state, self.crypto)
+
         elif backend == "s3":
-            # Would implement S3 upload here
             raise NotImplementedError("S3 backend not yet implemented")
 
     def _load_state(self, config: dict) -> Optional[dict]:
@@ -488,8 +505,11 @@ class DevSync:
             with open(state_file) as f:
                 return json.load(f)
 
+        elif backend == "cloud":
+            cloud = self._get_cloud_backend(config)
+            return cloud.pull(self.crypto)
+
         elif backend == "s3":
-            # Would implement S3 download here
             raise NotImplementedError("S3 backend not yet implemented")
 
         return None
