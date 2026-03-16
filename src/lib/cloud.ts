@@ -57,7 +57,7 @@ class CloudBackend {
     return response.json();
   }
 
-  async push(state: Record<string, any>, cryptoManager: any): Promise<void> {
+  async push(state: Record<string, any>, cryptoManager: any, metadata?: Record<string, any>): Promise<void> {
     state.machine = {
       id: this.machineId,
       hostname: os.hostname(),
@@ -74,6 +74,7 @@ class CloudBackend {
       encrypted_state: encryptedBase64,
       timestamp: new Date().toISOString(),
       version: '1.0',
+      metadata,
     });
 
     if (!response.ok) {

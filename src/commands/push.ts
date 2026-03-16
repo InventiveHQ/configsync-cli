@@ -116,6 +116,19 @@ export function registerPushCommand(program: Command): void {
           packages: config.packages || [],
         };
 
+        const metadata = {
+          timestamp: state.timestamp,
+          configs: capturedConfigs.map((c: any) => ({ source: c.source, encrypted: !!c.encrypted })),
+          repos: capturedRepos.map((r: any) => ({ url: r.url, path: r.path, branch: r.branch || r.current_branch })),
+          env_files: capturedEnvFiles.map((e: any) => ({ project_path: e.project_path, filename: e.filename })),
+          packages: (config.packages || []).map((p: any) => ({
+            manager: p.manager,
+            displayName: p.displayName,
+            count: p.packages.length,
+            items: p.packages,
+          })),
+        };
+
         if (config.sync.backend === 'cloud') {
           const apiUrl = config.sync.config.api_url;
           const apiKey = config.sync.config.api_key;
@@ -127,7 +140,7 @@ export function registerPushCommand(program: Command): void {
 
           const backend = new CloudBackend(apiUrl, apiKey);
           await backend.registerMachine();
-          await backend.push(state, cryptoManager);
+          await backend.push(state, cryptoManager, metadata);
         } else {
           const stateFile = path.join(configManager.stateDir, 'state.json');
           fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
