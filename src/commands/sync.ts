@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import readline from 'node:readline';
-import { ConfigManager } from '../lib/config.js';
+import { ConfigManager, EnvironmentDef } from '../lib/config.js';
 import CloudBackend from '../lib/cloud.js';
 import { getModule } from '../lib/modules.js';
 
@@ -41,12 +41,83 @@ function describeAction(action: any): string {
   }
 }
 
+interface SyncOptions {
+  yes?: boolean;
+  noDeleteLocal?: boolean;
+  noDeleteCloud?: boolean;
+  cloudWins?: boolean;
+  localWins?: boolean;
+}
+
+/**
+ * Merge cloud environments into local config based on flags.
+ *
+ * Returns { added, updated, removed } counts.
+ */
+function mergeCloudToLocal(
+  config: any,
+  cloudEnvs: any[],
+  opts: SyncOptions,
+): { added: number; updated: number; removed: number } {
+  if (!config.environments) config.environments = [];
+  const localByName = new Map<string, EnvironmentDef>();
+  for (const e of config.environments) localByName.set(e.name, e);
+
+  const cloudByName = new Map<string, any>();
+  for (const e of cloudEnvs) cloudByName.set(e.name, e);
+
+  let added = 0;
+  let updated = 0;
+  let removed = 0;
+
+  // Add cloud-only envs to local
+  for (const cloudEnv of cloudEnvs) {
+    const local = localByName.get(cloudEnv.name);
+    if (!local) {
+      config.environments.push({
+        name: cloudEnv.name,
+        tier: cloudEnv.tier,
+        color: cloudEnv.color,
+        protect: !!cloudEnv.protect,
+      });
+      added++;
+    } else if (opts.cloudWins) {
+      // Cloud wins: overwrite local with cloud values
+      local.tier = cloudEnv.tier;
+      local.color = cloudEnv.color;
+      local.protect = !!cloudEnv.protect;
+      updated++;
+    }
+    // Default (local-wins): local values are kept, no update needed
+  }
+
+  // Remove local envs that don't exist in cloud (unless --no-delete-local)
+  if (!opts.noDeleteLocal) {
+    const toRemove = config.environments.filter(
+      (e: EnvironmentDef) => !cloudByName.has(e.name)
+    );
+    for (const env of toRemove) {
+      const idx = config.environments.indexOf(env);
+      if (idx !== -1) {
+        config.environments.splice(idx, 1);
+        removed++;
+      }
+    }
+  }
+
+  return { added, updated, removed };
+}
+
 export function registerSyncCommand(program: Command): void {
   program
     .command('sync')
     .description('Bidirectional sync: merge local and cloud environments, then apply pending actions')
-    .option('-y, --yes', 'Skip confirmation prompt')
-    .action(async (options: { yes?: boolean }) => {
+    .option('-y, --yes', 'skip confirmation prompt')
+    .option('--no-delete-local', 'keep local environments even if deleted on cloud')
+    .option('--no-delete-cloud', 'keep cloud environments even if deleted locally')
+    .option('--cloud-wins', 'on conflict, prefer cloud version over local')
+    .option('--local-wins', 'on conflict, prefer local version (default)')
+    .action(async (options: SyncOptions) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -69,6 +140,11 @@ export function registerSyncCommand(program: Command): void {
         process.exit(1);
       }
 
+      if (options.cloudWins && options.localWins) {
+        console.error(chalk.red('Error: --cloud-wins and --local-wins are mutually exclusive.'));
+        process.exit(1);
+      }
+
       const backend = new CloudBackend(apiUrl, apiKey);
 
       // --- Bidirectional environment sync ---
@@ -81,44 +157,23 @@ export function registerSyncCommand(program: Command): void {
           protect: !!e.protect,
         }));
 
-        const merged = await backend.syncEnvironments(localEnvs);
+        // Push local to cloud (cloud-only envs deleted only if !noDeleteCloud)
+        const merged = await backend.syncEnvironments(localEnvs, {
+          deleteCloudOnly: !options.noDeleteCloud,
+        });
 
-        // Merge cloud-only environments into local
-        if (!config.environments) config.environments = [];
-        const localNames = new Set(config.environments.map(e => e.name));
-        let added = 0;
-        let updated = 0;
+        // Merge cloud into local
+        const result = mergeCloudToLocal(config, merged, options);
 
-        for (const cloudEnv of merged) {
-          const existing = config.environments.find(e => e.name === cloudEnv.name);
-          if (!existing) {
-            config.environments.push({
-              name: cloudEnv.name,
-              tier: cloudEnv.tier,
-              color: cloudEnv.color,
-              protect: !!cloudEnv.protect,
-            });
-            added++;
-          }
-        }
-
-        // Remove local environments that were deleted on the cloud
-        const cloudNames = new Set(merged.map((e: any) => e.name));
-        const toRemove = config.environments.filter(e => !cloudNames.has(e.name));
-        for (const env of toRemove) {
-          const idx = config.environments.indexOf(env);
-          config.environments.splice(idx, 1);
-          updated++;
-        }
-
-        if (added > 0 || updated > 0) {
+        if (result.added > 0 || result.updated > 0 || result.removed > 0) {
           configManager.save(config);
         }
 
         const envParts: string[] = [];
-        if (added > 0) envParts.push(`${added} pulled from cloud`);
+        if (result.added > 0) envParts.push(`${result.added} added from cloud`);
+        if (result.updated > 0) envParts.push(`${result.updated} updated from cloud`);
+        if (result.removed > 0) envParts.push(`${result.removed} removed locally`);
         if (localEnvs.length > 0) envParts.push(`${localEnvs.length} pushed to cloud`);
-        if (toRemove.length > 0) envParts.push(`${toRemove.length} removed locally`);
         envSpinner.succeed(`Environments synced! (${envParts.join(', ') || 'no changes'})`);
       } catch (err: any) {
         envSpinner.warn(`Environment sync failed: ${err.message}`);
@@ -216,7 +271,6 @@ export function registerSyncCommand(program: Command): void {
               break;
             }
 
-            // Dashboard sends { item: "brew:git" }, normalize
             const pkgItem = payload.item || payload.package;
             let removed = false;
             for (const pkgList of config.packages) {
@@ -259,7 +313,6 @@ export function registerSyncCommand(program: Command): void {
             pkgList.packages.push(payload.package);
             console.log(chalk.green(`  Added ${chalk.bold(payload.package)} to ${pkgList.displayName}`));
 
-            // Show the install command
             const installCmds: Record<string, string> = {
               brew: `brew install ${payload.package}`,
               'brew-cask': `brew install --cask ${payload.package}`,
@@ -351,7 +404,6 @@ export function registerSyncCommand(program: Command): void {
         clearSpinner.fail(`Failed to clear actions: ${err.message}`);
       }
 
-      // Auto-push the updated state
       if (applied > 0) {
         console.log(chalk.dim('\nRun "configsync push" to sync the updated config to the cloud.'));
       }

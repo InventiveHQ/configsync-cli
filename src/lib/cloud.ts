@@ -141,8 +141,14 @@ class CloudBackend {
     return data.environments || [];
   }
 
-  async syncEnvironments(environments: any[]): Promise<any[]> {
-    const response = await this.request('PUT', '/api/environments/sync', { environments });
+  async syncEnvironments(
+    environments: any[],
+    options?: { deleteCloudOnly?: boolean },
+  ): Promise<any[]> {
+    const response = await this.request('PUT', '/api/environments/sync', {
+      environments,
+      delete_missing: options?.deleteCloudOnly ?? false,
+    });
     if (!response.ok) {
       throw new Error(`Failed to sync environments: ${response.status} ${response.statusText}`);
     }

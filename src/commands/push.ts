@@ -23,8 +23,9 @@ export function registerPushCommand(program: Command): void {
     .description('Push current state to sync backend')
     .option('-m, --message <msg>', 'message describing this snapshot')
     .option('-y, --yes', 'skip confirmation prompt')
+    .option('--no-delete', 'push local additions without removing cloud-only environments')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
-    .action(async (options: { message?: string; yes?: boolean; iKnowWhatImDoing?: boolean }) => {
+    .action(async (options: { message?: string; yes?: boolean; noDelete?: boolean; iKnowWhatImDoing?: boolean }) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -345,7 +346,8 @@ export function registerPushCommand(program: Command): void {
                 tier: e.tier,
                 color: e.color || null,
                 protect: !!e.protect,
-              }))
+              })),
+              { deleteCloudOnly: !options.noDelete },
             );
             // Merge cloud-only environments back into local config
             const localNames = new Set((config.environments || []).map(e => e.name));

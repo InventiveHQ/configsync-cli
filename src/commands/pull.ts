@@ -125,6 +125,8 @@ export function registerPullCommand(program: Command): void {
     .option('--install', 'install missing packages after pull')
     .option('--install-yes', 'install missing packages without prompting')
     .option('--no-packages', 'skip package reconciliation')
+    .option('--no-delete', 'pull cloud additions without removing local-only environments')
+    .option('--cloud-wins', 'on conflict, prefer cloud version over local')
     .option('-y, --yes', 'skip confirmation prompt')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
     .action(async (options: {
@@ -136,6 +138,8 @@ export function registerPullCommand(program: Command): void {
       install?: boolean;
       installYes?: boolean;
       packages?: boolean; // --no-packages sets this to false
+      noDelete?: boolean;
+      cloudWins?: boolean;
       yes?: boolean;
       iKnowWhatImDoing?: boolean;
     }) => {
@@ -222,22 +226,49 @@ export function registerPullCommand(program: Command): void {
             const cloudEnvs = await backend.getEnvironments();
             if (cloudEnvs.length > 0) {
               if (!config.environments) config.environments = [];
-              const localNames = new Set(config.environments.map(e => e.name));
-              let merged = 0;
+              const cloudByName = new Map(cloudEnvs.map((e: any) => [e.name, e]));
+              let added = 0;
+              let updated = 0;
+              let removed = 0;
+
+              // Add cloud-only envs to local; optionally overwrite on conflict
               for (const cloudEnv of cloudEnvs) {
-                if (!localNames.has(cloudEnv.name)) {
+                const local = config.environments.find(e => e.name === cloudEnv.name);
+                if (!local) {
                   config.environments.push({
                     name: cloudEnv.name,
                     tier: cloudEnv.tier,
                     color: cloudEnv.color,
                     protect: !!cloudEnv.protect,
                   });
-                  merged++;
+                  added++;
+                } else if (options.cloudWins) {
+                  local.tier = cloudEnv.tier;
+                  local.color = cloudEnv.color;
+                  local.protect = !!cloudEnv.protect;
+                  updated++;
                 }
               }
-              if (merged > 0) {
+
+              // Remove local envs not in cloud (unless --no-delete)
+              if (!options.noDelete) {
+                const toRemove = config.environments.filter(e => !cloudByName.has(e.name));
+                for (const env of toRemove) {
+                  const idx = config.environments.indexOf(env);
+                  if (idx !== -1) {
+                    config.environments.splice(idx, 1);
+                    removed++;
+                  }
+                }
+              }
+
+              if (added > 0 || updated > 0 || removed > 0) {
                 configManager.save(config);
-                spinner.text = `Pulled ${merged} environment(s) from cloud...`;
+                const parts: string[] = [];
+                if (added) parts.push(`${added} added`);
+                if (updated) parts.push(`${updated} updated`);
+                if (removed) parts.push(`${removed} removed`);
+                spinner.text = `Environments: ${parts.join(', ')}`;
               }
             }
           } catch {
