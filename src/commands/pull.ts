@@ -4,10 +4,15 @@ import ora from 'ora';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 import { ConfigManager } from '../lib/config.js';
 import CryptoManager from '../lib/crypto.js';
 import CloudBackend from '../lib/cloud.js';
 import { promptPassword } from '../lib/prompt.js';
+
+function resolveHome(p: string): string {
+  return path.resolve(p.replace(/^~/, os.homedir()));
+}
 
 export function registerPullCommand(program: Command): void {
   program
@@ -45,11 +50,9 @@ export function registerPullCommand(program: Command): void {
           const backend = new CloudBackend(apiUrl, apiKey);
           state = await backend.pull(cryptoManager);
         } else {
-          // Local backend
           const stateFile = path.join(configManager.stateDir, 'state.json');
           if (fs.existsSync(stateFile)) {
-            const raw = fs.readFileSync(stateFile, 'utf-8');
-            state = JSON.parse(raw);
+            state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
           }
         }
 
@@ -58,43 +61,110 @@ export function registerPullCommand(program: Command): void {
           process.exit(1);
         }
 
-        let restoredCount = 0;
+        spinner.text = 'Restoring...';
 
+        let configsRestored = 0;
+        let reposCloned = 0;
+        let reposUpdated = 0;
+        let envsRestored = 0;
+        const warnings: string[] = [];
+
+        // Restore config files
         for (const entry of state.configs || []) {
-          const sourcePath = (entry.source as string).replace(/^~/, os.homedir());
-          const resolvedPath = path.resolve(sourcePath);
+          const resolvedPath = resolveHome(entry.source);
 
-          // Backup existing file if not forcing
           if (fs.existsSync(resolvedPath) && !options.force) {
             const backupName = `${path.basename(resolvedPath)}.${Date.now()}.bak`;
-            const backupPath = path.join(configManager.backupDir, backupName);
-            fs.copyFileSync(resolvedPath, backupPath);
+            fs.copyFileSync(resolvedPath, path.join(configManager.backupDir, backupName));
           }
 
-          // Ensure parent directory exists
           fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-
-          // Decode content
           let content: Buffer = Buffer.from(entry.content, 'base64');
-
-          // Decrypt if needed
           if (entry.encrypted) {
             content = Buffer.from(cryptoManager.decrypt(content));
           }
-
           fs.writeFileSync(resolvedPath, content);
-          restoredCount++;
+          configsRestored++;
         }
 
-        spinner.succeed(
-          `State restored successfully! (${restoredCount} config${restoredCount === 1 ? '' : 's'})`
-        );
+        // Restore repos (clone or update)
+        for (const repo of state.repos || []) {
+          const repoPath = resolveHome(repo.path);
 
-        if (state.timestamp) {
-          console.log(`  ${chalk.dim('Snapshot from:')} ${state.timestamp}`);
+          if (!fs.existsSync(repoPath)) {
+            // Clone
+            try {
+              fs.mkdirSync(path.dirname(repoPath), { recursive: true });
+              execSync(`git clone ${repo.url} ${repoPath}`, {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                timeout: 120000,
+              });
+              if (repo.branch && repo.branch !== 'main' && repo.branch !== 'master') {
+                execSync(`git checkout ${repo.branch}`, {
+                  cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'],
+                });
+              }
+              reposCloned++;
+            } catch (err: any) {
+              warnings.push(`Failed to clone ${repo.url}: ${err.message}`);
+            }
+          } else if (repo.auto_pull !== false && fs.existsSync(path.join(repoPath, '.git'))) {
+            // Pull latest
+            try {
+              execSync('git pull', {
+                cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'], timeout: 60000,
+              });
+              reposUpdated++;
+            } catch {
+              warnings.push(`Failed to pull ${repoPath}`);
+            }
+          }
+
+          if (repo.has_uncommitted) {
+            warnings.push(`${repo.path} had uncommitted changes on source machine`);
+          }
         }
-        if (state.message) {
-          console.log(`  ${chalk.dim('Message:')} ${state.message}`);
+
+        // Restore env files
+        for (const env of state.env_files || []) {
+          const envPath = path.join(resolveHome(env.project_path), env.filename || '.env.local');
+
+          if (fs.existsSync(envPath) && !options.force) {
+            const backupName = `${path.basename(envPath)}.${Date.now()}.bak`;
+            fs.copyFileSync(envPath, path.join(configManager.backupDir, backupName));
+          }
+
+          fs.mkdirSync(path.dirname(envPath), { recursive: true });
+          let content: Buffer = Buffer.from(env.content, 'base64');
+          if (env.encrypted) {
+            content = Buffer.from(cryptoManager.decrypt(content));
+          }
+          fs.writeFileSync(envPath, content, { mode: 0o600 });
+          envsRestored++;
+        }
+
+        // Build summary
+        const parts: string[] = [];
+        if (configsRestored) parts.push(`${configsRestored} config${configsRestored !== 1 ? 's' : ''}`);
+        if (reposCloned) parts.push(`${reposCloned} repo${reposCloned !== 1 ? 's' : ''} cloned`);
+        if (reposUpdated) parts.push(`${reposUpdated} repo${reposUpdated !== 1 ? 's' : ''} updated`);
+        if (envsRestored) parts.push(`${envsRestored} env file${envsRestored !== 1 ? 's' : ''}`);
+
+        spinner.succeed(`Restored! (${parts.join(', ') || 'no changes'})`);
+
+        if (state.timestamp) console.log(`  ${chalk.dim('Snapshot from:')} ${state.timestamp}`);
+        if (state.message) console.log(`  ${chalk.dim('Message:')} ${state.message}`);
+
+        // Show package info if available
+        if (state.packages?.length) {
+          const totalPkgs = state.packages.reduce((s: number, m: any) => s + m.packages.length, 0);
+          console.log(`\n  ${chalk.dim('Packages:')} ${totalPkgs} packages from ${state.packages.length} manager(s)`);
+          console.log(chalk.dim('  Run "configsync scan" to compare with this machine'));
+        }
+
+        if (warnings.length > 0) {
+          console.log(chalk.yellow('\nWarnings:'));
+          for (const w of warnings) console.log(chalk.yellow(`  - ${w}`));
         }
       } catch (err: any) {
         spinner.fail(`Pull failed: ${err.message}`);
