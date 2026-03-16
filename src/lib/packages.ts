@@ -24,7 +24,9 @@ const managers: PackageManagerDef[] = [
     name: 'brew',
     displayName: 'Homebrew',
     checkCmd: 'brew --version',
-    listCmd: 'brew list --formula -1 && echo "---CASKS---" && brew list --cask -1',
+    // brew leaves = top-level formulas only (not dependencies)
+    // brew list --cask = all casks (casks don't have deps)
+    listCmd: 'brew leaves && echo "---CASKS---" && brew list --cask -1',
     parseOutput: (output) => {
       const [formulas, casks] = output.split('---CASKS---');
       const formulaList = (formulas || '').trim().split('\n').filter(Boolean).map(p => `brew:${p.trim()}`);
@@ -36,25 +38,26 @@ const managers: PackageManagerDef[] = [
     name: 'apt',
     displayName: 'APT',
     checkCmd: 'apt --version',
-    listCmd: 'apt list --installed 2>/dev/null',
+    // apt-mark showmanual = explicitly installed, not pulled in as dependencies
+    listCmd: 'apt-mark showmanual 2>/dev/null',
     parseOutput: (output) => {
       return output
         .split('\n')
-        .filter(l => l.includes('[installed'))
-        .map(l => `apt:${l.split('/')[0].trim()}`);
+        .filter(l => l.trim())
+        .map(l => `apt:${l.trim()}`);
     },
   },
   {
     name: 'dnf',
     displayName: 'DNF',
     checkCmd: 'dnf --version',
-    listCmd: 'dnf list installed 2>/dev/null',
+    // --userinstalled = only packages the user explicitly installed
+    listCmd: 'dnf repoquery --userinstalled --qf "%{name}" 2>/dev/null',
     parseOutput: (output) => {
       return output
         .split('\n')
-        .slice(1) // skip header
-        .filter(l => l.trim() && !l.startsWith('Installed'))
-        .map(l => `dnf:${l.split(/\s+/)[0].split('.')[0]}`);
+        .filter(l => l.trim())
+        .map(l => `dnf:${l.trim()}`);
     },
   },
   {
