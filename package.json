@@ -1,17 +1,23 @@
 {
-  "name": "configsync",
-  "version": "0.1.0",
+  "name": "@spconroy/configsync",
+  "version": "0.1.1",
   "description": "Sync development environments across machines - configs, secrets, env vars, and more",
   "type": "module",
   "bin": {
-    "configsync": "./bin/configsync.js"
+    "configsync": "bin/configsync.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node bin/configsync.js"
   },
-  "keywords": ["dotfiles", "sync", "configuration", "devtools", "cli"],
+  "keywords": [
+    "dotfiles",
+    "sync",
+    "configuration",
+    "devtools",
+    "cli"
+  ],
   "license": "MIT",
   "dependencies": {
     "commander": "^12.0.0",
