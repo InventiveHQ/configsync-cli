@@ -66,6 +66,7 @@ export function registerPushCommand(program: Command): void {
           configs: capturedConfigs,
           repos: [],
           env_files: [],
+          packages: config.packages || [],
         };
 
         if (config.sync.backend === 'cloud') {

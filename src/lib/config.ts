@@ -34,6 +34,12 @@ export interface EnvFileConfig {
   encrypt?: boolean;
 }
 
+export interface PackageList {
+  manager: string;
+  displayName: string;
+  packages: string[];
+}
+
 export interface Config {
   version: string;
   profile: string;
@@ -42,6 +48,7 @@ export interface Config {
   env_files: EnvFileConfig[];
   secrets: { provider: string; config: Record<string, string> };
   sync: { backend: string; config: Record<string, string> };
+  packages?: PackageList[];
 }
 
 // ---------------------------------------------------------------------------
