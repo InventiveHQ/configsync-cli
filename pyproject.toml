@@ -1,8 +1,8 @@
 [project]
-name = "devsync"
+name = "configsync"
 version = "0.1.0"
 description = "Sync development environments between machines - git repos, secrets, configs, and more"
-authors = [{name = "DevSync Contributors"}]
+authors = [{name = "ConfigSync Contributors"}]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -25,6 +25,7 @@ onepassword = ["onepassword-sdk>=0.1.0"]
 bitwarden = ["bitwarden-sdk>=0.1.0"]
 
 [project.scripts]
+configsync = "devsync.cli:main"
 devsync = "devsync.cli:main"
 
 [build-system]
