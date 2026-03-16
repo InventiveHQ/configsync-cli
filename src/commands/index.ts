@@ -12,6 +12,7 @@ import { registerCompletionsCommand } from './completions.js';
 import { registerListCommand } from './list.js';
 import { registerRemoveCommand } from './remove.js';
 import { registerDoctorCommand } from './doctor.js';
+import { registerSyncCommand } from './sync.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -26,5 +27,6 @@ export function registerCommands(program: Command): void {
   registerStatusCommand(program);
   registerSecretCommand(program);
   registerCompletionsCommand(program);
+  registerSyncCommand(program);
   registerDoctorCommand(program);
 }

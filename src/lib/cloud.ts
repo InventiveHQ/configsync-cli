@@ -123,6 +123,17 @@ class CloudBackend {
     return response.ok;
   }
 
+  async getActions(): Promise<any[]> {
+    const response = await this.request('GET', `/api/machines/${this.machineId}/actions`);
+    if (!response.ok) return [];
+    const data = await response.json() as any;
+    return data.actions || [];
+  }
+
+  async clearActions(): Promise<void> {
+    await this.request('DELETE', `/api/machines/${this.machineId}/actions`);
+  }
+
   private async request(method: string, path: string, body?: any): Promise<Response> {
     const url = `${this.apiUrl}${path}`;
     const options: RequestInit = { method, headers: this.headers };
