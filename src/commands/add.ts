@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { ConfigManager } from '../lib/config.js';
+import { ConfigManager, ProjectConfig, GroupConfig } from '../lib/config.js';
 
 export function registerAddCommand(program: Command): void {
   const addCmd = program
@@ -26,7 +26,22 @@ export function registerAddCommand(program: Command): void {
         process.exit(1);
       }
 
-      let added = 0;
+      const projectName = path.basename(resolved);
+
+      // Check if project already exists by path
+      if (!config.projects) config.projects = [];
+      const existing = config.projects.find(p => resolveHome(p.path) === resolved);
+      if (existing) {
+        console.error(chalk.red(`Project '${existing.name}' already tracked at ${existing.path}`));
+        process.exit(1);
+      }
+
+      const project: ProjectConfig = {
+        name: projectName,
+        path: folder,
+        secrets: [],
+        configs: [],
+      };
 
       // Detect git repo
       if (fs.existsSync(path.join(resolved, '.git'))) {
@@ -38,13 +53,8 @@ export function registerAddCommand(program: Command): void {
             cwd: resolved, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
           }).trim();
 
-          if (!config.repos.find(r => r.url === url)) {
-            config.repos.push({ url, path: folder, branch: branch || 'main', auto_pull: true });
-            console.log(chalk.green(`  + repo: ${url} (${branch || 'main'})`));
-            added++;
-          } else {
-            console.log(chalk.dim(`  - repo already tracked: ${url}`));
-          }
+          project.repo = { url, branch: branch || 'main' };
+          console.log(chalk.green(`  + repo: ${url} (${branch || 'main'})`));
         } catch {
           console.log(chalk.yellow('  - git repo detected but no remote origin'));
         }
@@ -60,16 +70,8 @@ export function registerAddCommand(program: Command): void {
       for (const name of sensitiveFiles) {
         const filePath = path.join(resolved, name);
         if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          const alreadyTracked = config.env_files.find(
-            e => resolveHome(e.project_path) === resolved && e.filename === name
-          ) || config.configs.find(c => c.source === path.join(folder, name));
-          if (!alreadyTracked) {
-            config.env_files.push({ project_path: folder, filename: name, encrypt: true });
-            console.log(chalk.green(`  + secret: ${name} (encrypted)`));
-            added++;
-          } else {
-            console.log(chalk.dim(`  - already tracked: ${name}`));
-          }
+          project.secrets.push(name);
+          console.log(chalk.green(`  + secret: ${name} (encrypted)`));
         }
       }
 
@@ -102,19 +104,135 @@ export function registerAddCommand(program: Command): void {
       });
 
       for (const dotfile of dotfiles) {
-        const dotPath = path.join(folder, dotfile);
-        if (!config.configs.find(c => c.source === dotPath)) {
-          config.configs.push({ source: dotPath });
-          console.log(chalk.green(`  + config: ${dotfile}`));
-          added++;
+        project.configs.push(dotfile);
+        console.log(chalk.green(`  + config: ${dotfile}`));
+      }
+
+      const totalItems = (project.repo ? 1 : 0) + project.secrets.length + project.configs.length;
+
+      if (totalItems > 0) {
+        config.projects.push(project);
+        configManager.save(config);
+        console.log(chalk.green(`\nAdded project '${projectName}' with ${totalItems} item${totalItems !== 1 ? 's' : ''}`));
+      } else {
+        console.log(chalk.dim('\nNothing found to track in this folder.'));
+      }
+    });
+
+  // configsync add group <folder> — scan all subfolders as projects
+  addCmd
+    .command('group <folder>')
+    .description('Add a folder of projects (each subfolder with a git repo becomes a project)')
+    .action(async (folder: string) => {
+      const configManager = new ConfigManager();
+      ensureInit(configManager);
+      const config = configManager.load();
+
+      const resolved = resolveHome(folder);
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+        console.error(chalk.red(`'${folder}' is not a directory.`));
+        process.exit(1);
+      }
+
+      const groupName = path.basename(resolved);
+
+      if (!config.groups) config.groups = [];
+      const existingGroup = config.groups.find(g => resolveHome(g.path) === resolved);
+      if (existingGroup) {
+        console.error(chalk.red(`Group '${existingGroup.name}' already tracked at ${existingGroup.path}`));
+        process.exit(1);
+      }
+
+      const group: GroupConfig = {
+        name: groupName,
+        path: folder,
+        projects: [],
+      };
+
+      // Scan each subdirectory
+      const subdirs = fs.readdirSync(resolved).filter(f => {
+        const full = path.join(resolved, f);
+        return fs.statSync(full).isDirectory() && !f.startsWith('.') && f !== 'node_modules';
+      });
+
+      console.log(chalk.bold(`Scanning ${groupName}/ (${subdirs.length} folders)...\n`));
+
+      for (const subdir of subdirs) {
+        const subPath = path.join(resolved, subdir);
+        const projectPath = path.join(folder, subdir);
+
+        // Only include folders that are git repos
+        if (!fs.existsSync(path.join(subPath, '.git'))) {
+          console.log(chalk.dim(`  - ${subdir}/ (not a git repo, skipping)`));
+          continue;
+        }
+
+        const project: ProjectConfig = {
+          name: subdir,
+          path: projectPath,
+          secrets: [],
+          configs: [],
+        };
+
+        // Git info
+        try {
+          const url = execSync('git remote get-url origin', {
+            cwd: subPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+          const branch = execSync('git branch --show-current', {
+            cwd: subPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+          project.repo = { url, branch: branch || 'main' };
+        } catch {
+          // No remote, still track the folder
+        }
+
+        // Scan for secrets
+        const sensitiveFiles = [
+          '.env', '.env.local', '.env.development', '.env.production', '.env.staging', '.env.test',
+          '.dev.vars', '.mcp.json',
+        ];
+        for (const name of sensitiveFiles) {
+          if (fs.existsSync(path.join(subPath, name))) {
+            project.secrets.push(name);
+          }
+        }
+
+        // Scan for dotfiles
+        const ignoreList = new Set([
+          '.git', '.DS_Store', '.gitignore', '.gitattributes', '.gitmodules',
+          '.node_modules', '.next', '.vscode', '.idea', '.turbo',
+          '.wrangler', '.open-next', '.vercel', '.netlify',
+          '.build-trigger', '.trigger-deploy',
+          '.cache', '.parcel-cache', '.eslintcache',
+          ...sensitiveFiles,
+        ]);
+        const ignorePatterns = [/^\.tool-/, /^\.qa-/, /-cache\.json$/, /-trigger$/];
+
+        const dotfiles = fs.readdirSync(subPath).filter(f => {
+          if (!f.startsWith('.')) return false;
+          if (ignoreList.has(f)) return false;
+          if (ignorePatterns.some(p => p.test(f))) return false;
+          return fs.statSync(path.join(subPath, f)).isFile();
+        });
+        project.configs = dotfiles;
+
+        group.projects.push(project);
+
+        const repoLabel = project.repo ? chalk.dim(` (${project.repo.url.split('/').pop()?.replace('.git', '')})`) : '';
+        const itemCount = (project.repo ? 1 : 0) + project.secrets.length + project.configs.length;
+        console.log(chalk.green(`  + ${subdir}/${repoLabel} — ${itemCount} items`));
+        if (project.secrets.length > 0) {
+          console.log(chalk.dim(`      secrets: ${project.secrets.join(', ')}`));
         }
       }
 
-      if (added > 0) {
+      if (group.projects.length > 0) {
+        config.groups.push(group);
         configManager.save(config);
-        console.log(chalk.green(`\nAdded ${added} item${added !== 1 ? 's' : ''} from ${folder}`));
+        console.log(chalk.green(`\nAdded group '${groupName}' with ${group.projects.length} project${group.projects.length !== 1 ? 's' : ''}`));
       } else {
-        console.log(chalk.dim('\nNothing new to add.'));
+        console.log(chalk.yellow('\nNo git repos found in subdirectories.'));
       }
     });
 

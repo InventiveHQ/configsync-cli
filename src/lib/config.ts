@@ -40,6 +40,23 @@ export interface PackageList {
   packages: string[];
 }
 
+export interface ProjectConfig {
+  name: string;           // e.g. "inventivehq.com"
+  path: string;           // e.g. "~/git/inventivehq.com"
+  repo?: {
+    url: string;
+    branch: string;
+  };
+  secrets: string[];      // encrypted files: [".env.local", ".dev.vars", ".mcp.json"]
+  configs: string[];      // regular dotfiles: [".eslintrc.json", ".env.example"]
+}
+
+export interface GroupConfig {
+  name: string;              // e.g. "micro_sites", "configsync"
+  path: string;              // e.g. "~/git/micro_sites"
+  projects: ProjectConfig[]; // child projects within this group
+}
+
 export interface Config {
   version: string;
   profile: string;
@@ -49,6 +66,8 @@ export interface Config {
   secrets: { provider: string; config: Record<string, string> };
   sync: { backend: string; config: Record<string, string> };
   packages?: PackageList[];
+  projects?: ProjectConfig[];
+  groups?: GroupConfig[];
 }
 
 // ---------------------------------------------------------------------------

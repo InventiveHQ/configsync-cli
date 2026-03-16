@@ -183,12 +183,65 @@ export function registerPullCommand(program: Command): void {
           envsRestored++;
         }
 
+        // Restore projects
+        let projectsRestored = 0;
+        for (const project of state.projects || []) {
+          const projectPath = resolveHome(project.path);
+
+          // Clone repo if needed
+          if (project.repo?.url && !fs.existsSync(projectPath)) {
+            try {
+              fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+              execSync(`git clone ${project.repo.url} ${projectPath}`, {
+                stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000,
+              });
+              if (project.repo.branch && project.repo.branch !== 'main' && project.repo.branch !== 'master') {
+                execSync(`git checkout ${project.repo.branch}`, {
+                  cwd: projectPath, stdio: ['pipe', 'pipe', 'pipe'],
+                });
+              }
+            } catch (err: any) {
+              warnings.push(`Failed to clone ${project.repo.url}: ${err.message}`);
+              continue;
+            }
+          }
+
+          // Restore secrets
+          for (const secret of project.secrets || []) {
+            const filePath = path.join(projectPath, secret.filename);
+            if (fs.existsSync(filePath) && !options.force) {
+              const backupName = `${secret.filename}.${Date.now()}.bak`;
+              fs.copyFileSync(filePath, path.join(configManager.backupDir, backupName));
+            }
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            let content: Buffer = Buffer.from(secret.content, 'base64');
+            if (secret.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
+            fs.writeFileSync(filePath, content, { mode: 0o600 });
+          }
+
+          // Restore configs
+          for (const cfg of project.configs || []) {
+            const filePath = path.join(projectPath, cfg.filename);
+            if (fs.existsSync(filePath) && !options.force) {
+              const backupName = `${cfg.filename}.${Date.now()}.bak`;
+              fs.copyFileSync(filePath, path.join(configManager.backupDir, backupName));
+            }
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            let content: Buffer = Buffer.from(cfg.content, 'base64');
+            if (cfg.encrypted) content = Buffer.from(cryptoManager.decrypt(content));
+            fs.writeFileSync(filePath, content);
+          }
+
+          projectsRestored++;
+        }
+
         // Build summary
         const parts: string[] = [];
         if (configsRestored) parts.push(`${configsRestored} config${configsRestored !== 1 ? 's' : ''}`);
         if (reposCloned) parts.push(`${reposCloned} repo${reposCloned !== 1 ? 's' : ''} cloned`);
         if (reposUpdated) parts.push(`${reposUpdated} repo${reposUpdated !== 1 ? 's' : ''} updated`);
         if (envsRestored) parts.push(`${envsRestored} env file${envsRestored !== 1 ? 's' : ''}`);
+        if (projectsRestored) parts.push(`${projectsRestored} project${projectsRestored !== 1 ? 's' : ''}`);
 
         spinner.succeed(`Restored! (${parts.join(', ') || 'no changes'})`);
 

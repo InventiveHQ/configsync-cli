@@ -107,6 +107,104 @@ export function registerPushCommand(program: Command): void {
           });
         }
 
+        // Capture projects
+        const capturedProjects: Record<string, any>[] = [];
+        for (const project of config.projects || []) {
+          const projectPath = resolveHome(project.path);
+          const capturedProject: Record<string, any> = {
+            name: project.name,
+            path: project.path,
+            repo: project.repo || null,
+            secrets: [],
+            configs: [],
+          };
+
+          // Capture project secrets (encrypted)
+          for (const secretName of project.secrets) {
+            const secretPath = path.join(projectPath, secretName);
+            if (!fs.existsSync(secretPath)) continue;
+            let content: Buffer = Buffer.from(fs.readFileSync(secretPath));
+            content = Buffer.from(cryptoManager.encrypt(content));
+            capturedProject.secrets.push({
+              filename: secretName,
+              content: content.toString('base64'),
+              encrypted: true,
+            });
+          }
+
+          // Capture project configs (not encrypted by default)
+          for (const configName of project.configs) {
+            const configPath = path.join(projectPath, configName);
+            if (!fs.existsSync(configPath)) continue;
+            let content: Buffer = Buffer.from(fs.readFileSync(configPath));
+            capturedProject.configs.push({
+              filename: configName,
+              content: content.toString('base64'),
+              encrypted: false,
+            });
+          }
+
+          // Capture repo state if exists
+          if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
+            try {
+              capturedProject.repo.current_branch = execSync('git branch --show-current', {
+                cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+              }).trim();
+              capturedProject.repo.commit = execSync('git rev-parse HEAD', {
+                cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+              }).trim();
+            } catch {}
+          }
+
+          capturedProjects.push(capturedProject);
+        }
+
+        // Capture groups (each group contains multiple projects)
+        const capturedGroups: Record<string, any>[] = [];
+        for (const group of config.groups || []) {
+          const capturedGroup: Record<string, any> = {
+            name: group.name,
+            path: group.path,
+            projects: [],
+          };
+
+          for (const project of group.projects) {
+            const projectPath = resolveHome(project.path);
+            const cp: Record<string, any> = {
+              name: project.name,
+              path: project.path,
+              repo: project.repo || null,
+              secrets: [],
+              configs: [],
+            };
+
+            for (const secretName of project.secrets) {
+              const secretPath = path.join(projectPath, secretName);
+              if (!fs.existsSync(secretPath)) continue;
+              let content: Buffer = Buffer.from(fs.readFileSync(secretPath));
+              content = Buffer.from(cryptoManager.encrypt(content));
+              cp.secrets.push({ filename: secretName, content: content.toString('base64'), encrypted: true });
+            }
+
+            for (const configName of project.configs) {
+              const configPath = path.join(projectPath, configName);
+              if (!fs.existsSync(configPath)) continue;
+              cp.configs.push({ filename: configName, content: Buffer.from(fs.readFileSync(configPath)).toString('base64'), encrypted: false });
+            }
+
+            if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
+              try {
+                cp.repo.current_branch = execSync('git branch --show-current', { cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+                cp.repo.commit = execSync('git rev-parse HEAD', { cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+              } catch {}
+            }
+
+            capturedGroup.projects.push(cp);
+          }
+
+          capturedGroups.push(capturedGroup);
+        }
+
         const state: Record<string, any> = {
           timestamp: new Date().toISOString(),
           message: options.message || '',
@@ -114,6 +212,8 @@ export function registerPushCommand(program: Command): void {
           repos: capturedRepos,
           env_files: capturedEnvFiles,
           packages: config.packages || [],
+          projects: capturedProjects,
+          groups: capturedGroups,
         };
 
         const metadata = {
@@ -126,6 +226,24 @@ export function registerPushCommand(program: Command): void {
             displayName: p.displayName,
             count: p.packages.length,
             items: p.packages,
+          })),
+          projects: (config.projects || []).map((p: any) => ({
+            name: p.name,
+            path: p.path,
+            repo: p.repo || null,
+            secrets: p.secrets,
+            configs: p.configs,
+          })),
+          groups: (config.groups || []).map((g: any) => ({
+            name: g.name,
+            path: g.path,
+            projects: g.projects.map((p: any) => ({
+              name: p.name,
+              path: p.path,
+              repo: p.repo || null,
+              secrets: p.secrets,
+              configs: p.configs,
+            })),
           })),
         };
 
@@ -150,6 +268,8 @@ export function registerPushCommand(program: Command): void {
           `${capturedConfigs.length} config${capturedConfigs.length !== 1 ? 's' : ''}`,
           `${capturedRepos.length} repo${capturedRepos.length !== 1 ? 's' : ''}`,
           `${capturedEnvFiles.length} env file${capturedEnvFiles.length !== 1 ? 's' : ''}`,
+          `${capturedProjects.length} project${capturedProjects.length !== 1 ? 's' : ''}`,
+          `${capturedGroups.length} group${capturedGroups.length !== 1 ? 's' : ''}`,
         ].filter(p => !p.startsWith('0'));
 
         spinner.succeed(`State pushed! (${parts.join(', ')})`);
