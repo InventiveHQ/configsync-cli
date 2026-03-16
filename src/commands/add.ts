@@ -28,6 +28,10 @@ export function registerAddCommand(program: Command): void {
       }
 
       const projectName = path.basename(resolved);
+      // Always store absolute path so ./  doesn't collide across directories
+      const storedPath = resolved.startsWith(os.homedir())
+        ? '~' + resolved.slice(os.homedir().length)
+        : resolved;
 
       // Check if project already exists by path
       if (!config.projects) config.projects = [];
@@ -39,7 +43,7 @@ export function registerAddCommand(program: Command): void {
 
       const project: ProjectConfig = {
         name: projectName,
-        path: folder,
+        path: storedPath,
         secrets: [],
         configs: [],
       };
@@ -136,6 +140,9 @@ export function registerAddCommand(program: Command): void {
       }
 
       const groupName = path.basename(resolved);
+      const storedGroupPath = resolved.startsWith(os.homedir())
+        ? '~' + resolved.slice(os.homedir().length)
+        : resolved;
 
       if (!config.groups) config.groups = [];
       const existingGroup = config.groups.find(g => resolveHome(g.path) === resolved);
@@ -146,7 +153,7 @@ export function registerAddCommand(program: Command): void {
 
       const group: GroupConfig = {
         name: groupName,
-        path: folder,
+        path: storedGroupPath,
         projects: [],
       };
 
@@ -160,7 +167,9 @@ export function registerAddCommand(program: Command): void {
 
       for (const subdir of subdirs) {
         const subPath = path.join(resolved, subdir);
-        const projectPath = path.join(folder, subdir);
+        const storedSubPath = subPath.startsWith(os.homedir())
+          ? '~' + subPath.slice(os.homedir().length)
+          : subPath;
 
         // Only include folders that are git repos
         if (!fs.existsSync(path.join(subPath, '.git'))) {
@@ -170,7 +179,7 @@ export function registerAddCommand(program: Command): void {
 
         const project: ProjectConfig = {
           name: subdir,
-          path: projectPath,
+          path: storedSubPath,
           secrets: [],
           configs: [],
         };
