@@ -8,7 +8,7 @@ _configsync_completions() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-  commands="init login logout add push pull status scan secret completions"
+  commands="init login logout add remove list push pull status scan secret completions sync doctor machine env"
 
   case "\${prev}" in
     configsync)
@@ -23,12 +23,32 @@ _configsync_completions() {
       COMPREPLY=( $(compgen -W "set get list" -- "\${cur}") )
       return 0
       ;;
+    machine)
+      COMPREPLY=( $(compgen -W "tag var" -- "\${cur}") )
+      return 0
+      ;;
+    tag)
+      COMPREPLY=( $(compgen -W "add remove list" -- "\${cur}") )
+      return 0
+      ;;
+    var)
+      COMPREPLY=( $(compgen -W "set get list" -- "\${cur}") )
+      return 0
+      ;;
+    env)
+      COMPREPLY=( $(compgen -W "list create activate deactivate current shell hook delete vars" -- "\${cur}") )
+      return 0
+      ;;
     pull)
-      COMPREPLY=( $(compgen -W "--force --from --group --project --list-machines" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "--force --from --group --project --list-machines --install --install-yes --no-packages --env" -- "\${cur}") )
       return 0
       ;;
     push)
-      COMPREPLY=( $(compgen -W "-m --message" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "-m --message --env" -- "\${cur}") )
+      return 0
+      ;;
+    scan)
+      COMPREPLY=( $(compgen -W "--diff" -- "\${cur}") )
       return 0
       ;;
     login)
@@ -43,7 +63,15 @@ _configsync_completions() {
       COMPREPLY=( $(compgen -W "local cloud" -- "\${cur}") )
       return 0
       ;;
-    project|group|config|repo|env)
+    hook)
+      COMPREPLY=( $(compgen -W "bash zsh fish" -- "\${cur}") )
+      return 0
+      ;;
+    create|activate|shell|delete)
+      # Would need dynamic completions from config
+      return 0
+      ;;
+    project|group|config|repo)
       # Complete with directories/files
       COMPREPLY=( $(compgen -f -- "\${cur}") )
       return 0
@@ -51,7 +79,7 @@ _configsync_completions() {
   esac
 
   if [[ "\${cur}" == -* ]]; then
-    COMPREPLY=( $(compgen -W "--help --version" -- "\${cur}") )
+    COMPREPLY=( $(compgen -W "--help --version --env" -- "\${cur}") )
   fi
 }
 complete -F _configsync_completions configsync
@@ -60,19 +88,25 @@ complete -F _configsync_completions configsync
 const zshCompletion = `
 # configsync zsh completion
 _configsync() {
-  local -a commands add_commands secret_commands
+  local -a commands add_commands secret_commands machine_commands tag_commands var_commands env_commands
 
   commands=(
     'init:Initialize ConfigSync on this machine'
     'login:Log in to ConfigSync cloud'
     'logout:Log out from ConfigSync cloud'
     'add:Add items to sync'
+    'remove:Remove items from sync'
+    'list:List tracked items'
     'push:Push current state to sync backend'
     'pull:Pull and restore state from sync backend'
     'status:Show current sync status'
     'scan:Scan for installed packages'
     'secret:Manage secrets'
     'completions:Generate shell completions'
+    'sync:Apply pending actions from dashboard'
+    'doctor:Run system diagnostics'
+    'machine:Manage machine tags and variables'
+    'env:Manage environments (dev, staging, prod)'
   )
 
   add_commands=(
@@ -89,6 +123,35 @@ _configsync() {
     'list:List stored secrets'
   )
 
+  machine_commands=(
+    'tag:Manage machine tags'
+    'var:Manage machine variables'
+  )
+
+  tag_commands=(
+    'add:Add a tag'
+    'remove:Remove a tag'
+    'list:List tags'
+  )
+
+  var_commands=(
+    'set:Set a variable'
+    'get:Get a variable'
+    'list:List variables'
+  )
+
+  env_commands=(
+    'list:List environments'
+    'create:Create an environment'
+    'activate:Activate an environment'
+    'deactivate:Deactivate the current environment'
+    'current:Show the active environment'
+    'shell:Spawn a subshell with an environment'
+    'hook:Print shell hook code'
+    'delete:Delete an environment'
+    'vars:Output export statements for current project'
+  )
+
   if (( CURRENT == 2 )); then
     _describe 'command' commands
   elif (( CURRENT == 3 )); then
@@ -99,24 +162,57 @@ _configsync() {
       secret)
         _describe 'subcommand' secret_commands
         ;;
+      machine)
+        _describe 'subcommand' machine_commands
+        ;;
+      env)
+        _describe 'subcommand' env_commands
+        ;;
       pull)
         _arguments \\
           '--force[overwrite existing files]' \\
           '--from[pull from specific machine]:machine:' \\
           '--group[pull specific group]:group:' \\
           '--project[pull specific project]:project:' \\
-          '--list-machines[list available machines]'
+          '--list-machines[list available machines]' \\
+          '--install[install missing packages]' \\
+          '--install-yes[install without prompting]' \\
+          '--no-packages[skip package reconciliation]' \\
+          '--env[set active environment]:environment:'
         ;;
       push)
         _arguments \\
           '-m[snapshot message]:message:' \\
-          '--message[snapshot message]:message:'
+          '--message[snapshot message]:message:' \\
+          '--env[set active environment]:environment:'
+        ;;
+      scan)
+        _arguments \\
+          '--diff[show diff against remote packages]'
         ;;
       *)
         _files
         ;;
     esac
-  elif (( CURRENT >= 4 )); then
+  elif (( CURRENT == 4 )); then
+    case "\${words[2]}" in
+      machine)
+        case "\${words[3]}" in
+          tag) _describe 'tag subcommand' tag_commands ;;
+          var) _describe 'var subcommand' var_commands ;;
+        esac
+        ;;
+      env)
+        case "\${words[3]}" in
+          hook) _values 'shell' bash zsh fish ;;
+          *) _files ;;
+        esac
+        ;;
+      *)
+        _files
+        ;;
+    esac
+  elif (( CURRENT >= 5 )); then
     _files
   fi
 }

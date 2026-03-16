@@ -9,6 +9,9 @@ import { ConfigManager } from '../lib/config.js';
 import CryptoManager from '../lib/crypto.js';
 import CloudBackend from '../lib/cloud.js';
 import { promptPassword } from '../lib/prompt.js';
+import { EnvironmentManager } from '../lib/environment.js';
+import { requireConfirmation } from '../lib/safety.js';
+import { renderBanner } from '../lib/banner.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
@@ -19,7 +22,9 @@ export function registerPushCommand(program: Command): void {
     .command('push')
     .description('Push current state to sync backend')
     .option('-m, --message <msg>', 'message describing this snapshot')
-    .action(async (options: { message?: string }) => {
+    .option('-y, --yes', 'skip confirmation prompt')
+    .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
+    .action(async (options: { message?: string; yes?: boolean; iKnowWhatImDoing?: boolean }) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -28,6 +33,17 @@ export function registerPushCommand(program: Command): void {
       }
 
       const config = configManager.load();
+
+      // Environment safety check
+      const envManager = new EnvironmentManager(configManager.configDir);
+      const activeEnv = envManager.getActive(config, program.opts().env);
+      if (activeEnv) {
+        console.log(renderBanner(activeEnv));
+        const confirmed = await requireConfirmation(activeEnv, 'push', options);
+        if (!confirmed) {
+          process.exit(1);
+        }
+      }
 
       const password = await promptPassword('Enter master password: ');
       const cryptoManager = new CryptoManager(configManager.configDir);
@@ -238,17 +254,27 @@ export function registerPushCommand(program: Command): void {
           }
         }
 
+        // Environment-scoped secrets
+        const activeEnvName = activeEnv?.name || envManager.resolve(program.opts().env);
+        const envFilesByEnvironment: Record<string, any[]> = {};
+        if (activeEnvName) {
+          envFilesByEnvironment[activeEnvName] = capturedEnvFiles;
+        }
+
         const state: Record<string, any> = {
           timestamp: new Date().toISOString(),
           message: options.message || '',
+          active_environment: activeEnvName || null,
           configs: capturedConfigs,
           repos: capturedRepos,
           env_files: capturedEnvFiles,
+          env_files_by_environment: envFilesByEnvironment,
           packages: config.packages || [],
           projects: capturedProjects,
           groups: capturedGroups,
           modules: capturedModules,
           env_vars: capturedEnvVars,
+          machine_vars: config.machine || null,
         };
 
         const metadata = {
@@ -286,6 +312,8 @@ export function registerPushCommand(program: Command): void {
             extras: m.extras || null,
           })),
           env_vars: Object.keys(capturedEnvVars),
+          machine_vars: config.machine || null,
+          active_environment: activeEnvName || null,
         };
 
         if (config.sync.backend === 'cloud') {
