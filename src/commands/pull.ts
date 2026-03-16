@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { ConfigManager } from '../lib/config.js';
 import CryptoManager from '../lib/crypto.js';
 import CloudBackend from '../lib/cloud.js';
@@ -32,11 +32,11 @@ function cloneOrPullRepo(
   if (!fs.existsSync(repoPath)) {
     try {
       fs.mkdirSync(path.dirname(repoPath), { recursive: true });
-      execSync(`git clone ${repo.url} ${repoPath}`, {
+      execFileSync('git', ['clone', repo.url, repoPath], {
         stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000,
       });
       if (repo.branch && repo.branch !== 'main' && repo.branch !== 'master') {
-        execSync(`git checkout ${repo.branch}`, {
+        execFileSync('git', ['checkout', repo.branch!], {
           cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'],
         });
       }
@@ -46,7 +46,7 @@ function cloneOrPullRepo(
     }
   } else if (fs.existsSync(path.join(repoPath, '.git'))) {
     try {
-      execSync('git pull', {
+      execFileSync('git', ['pull'], {
         cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'], timeout: 60000,
       });
       stats.updated++;
@@ -216,6 +216,33 @@ export function registerPullCommand(program: Command): void {
           }
 
           state = await backend.pull(cryptoManager, pullFromMachineId);
+
+          // Merge cloud environments into local config
+          try {
+            const cloudEnvs = await backend.getEnvironments();
+            if (cloudEnvs.length > 0) {
+              if (!config.environments) config.environments = [];
+              const localNames = new Set(config.environments.map(e => e.name));
+              let merged = 0;
+              for (const cloudEnv of cloudEnvs) {
+                if (!localNames.has(cloudEnv.name)) {
+                  config.environments.push({
+                    name: cloudEnv.name,
+                    tier: cloudEnv.tier,
+                    color: cloudEnv.color,
+                    protect: !!cloudEnv.protect,
+                  });
+                  merged++;
+                }
+              }
+              if (merged > 0) {
+                configManager.save(config);
+                spinner.text = `Pulled ${merged} environment(s) from cloud...`;
+              }
+            }
+          } catch {
+            // Environment sync is non-critical
+          }
         } else {
           const stateFile = path.join(configManager.stateDir, 'state.json');
           if (fs.existsSync(stateFile)) {
@@ -470,6 +497,7 @@ function writeEnvInject(
       const eqIdx = trimmed.indexOf('=');
       if (eqIdx === -1) continue;
       const key = trimmed.slice(0, eqIdx).trim();
+      if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(key)) continue;
       let value = trimmed.slice(eqIdx + 1).trim();
       // Strip surrounding quotes
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {

@@ -16,6 +16,8 @@ program
 // Display environment banner before every command
 program.hook('preAction', () => {
   try {
+    if (!process.stdout.isTTY) return;
+
     const configManager = new ConfigManager();
     if (!configManager.exists()) return;
 
@@ -39,7 +41,7 @@ program.hook('preAction', () => {
       process.stdout.write(setTabTitle(`[${EnvironmentManager.tierLabel(activeEnv.tier, activeEnv.name)}] ${os.hostname()}`));
     }
   } catch {
-    // Banner rendering is non-critical — don't block commands
+    // Banner rendering is non-critical
   }
 });
 

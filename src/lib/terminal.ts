@@ -143,16 +143,7 @@ _configsync_update_env() {
 }
 
 _configsync_chpwd_inject() {
-  local inject_dir="\${HOME}/.configsync/env_inject"
-  [[ -d "\${inject_dir}" ]] || return
-  for f in "\${inject_dir}"/*.json; do
-    [[ -f "\${f}" ]] || continue
-    local dir="$(command grep -o '"directory":"[^"]*"' "\${f}" | cut -d'"' -f4)"
-    if [[ "\${PWD}" == "\${dir}"* ]]; then
-      local env="$(command grep -o '"env":"[^"]*"' "\${f}" | cut -d'"' -f4)"
-      [[ -n "\${env}" ]] && echo "\${env}" > "\${HOME}/.configsync/active-env"
-    fi
-  done
+  eval "$(configsync env vars --for-shell 2>/dev/null)"
 }
 
 precmd_functions+=(_configsync_update_env)
@@ -165,6 +156,7 @@ function bashHook(): string {
 # Add to ~/.bashrc: eval "$(configsync shell-hook bash)"
 
 _configsync_original_ps1="\${PS1}"
+_configsync_last_pwd=""
 
 _configsync_prompt_command() {
   local env_file="\${HOME}/.configsync/active-env"
@@ -190,17 +182,10 @@ _configsync_prompt_command() {
     PS1="\${_configsync_original_ps1}"
   fi
 
-  # Check env injection on directory change
-  local inject_dir="\${HOME}/.configsync/env_inject"
-  if [[ -d "\${inject_dir}" ]]; then
-    for f in "\${inject_dir}"/*.json; do
-      [[ -f "\${f}" ]] || continue
-      local dir="$(command grep -o '"directory":"[^"]*"' "\${f}" | cut -d'"' -f4)"
-      if [[ "\${PWD}" == "\${dir}"* ]]; then
-        local env="$(command grep -o '"env":"[^"]*"' "\${f}" | cut -d'"' -f4)"
-        [[ -n "\${env}" ]] && echo "\${env}" > "\${HOME}/.configsync/active-env"
-      fi
-    done
+  # Only run env injection when directory actually changes
+  if [[ "\${PWD}" != "\${_configsync_last_pwd}" ]]; then
+    _configsync_last_pwd="\${PWD}"
+    eval "$(configsync env vars --for-shell 2>/dev/null)"
   fi
 }
 
@@ -253,17 +238,7 @@ function fish_prompt
 end
 
 function _configsync_chpwd --on-variable PWD
-  set -l inject_dir "$HOME/.configsync/env_inject"
-  if test -d $inject_dir
-    for f in $inject_dir/*.json
-      test -f $f; or continue
-      set -l dir (string match -r '"directory":"([^"]*)"' (cat $f))[2]
-      if string match -q "$dir*" $PWD
-        set -l env (string match -r '"env":"([^"]*)"' (cat $f))[2]
-        test -n "$env"; and echo $env > "$HOME/.configsync/active-env"
-      end
-    end
-  end
+  eval (configsync env vars --for-shell 2>/dev/null)
 end
 `;
 }

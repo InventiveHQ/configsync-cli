@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { ConfigManager, EnvironmentDef } from '../lib/config.js';
-import { EnvironmentManager } from '../lib/environment.js';
+import { EnvironmentManager, isValidEnvName } from '../lib/environment.js';
 import { renderBanner } from '../lib/banner.js';
 import { generateShellHook, setBackgroundTint, setTabTitle, setStatusBar, resetBackground, resetStatusBar, shouldApplyEffect } from '../lib/terminal.js';
 
@@ -82,6 +82,11 @@ export function registerEnvCommand(program: Command): void {
         process.exit(1);
       }
 
+      if (!isValidEnvName(name)) {
+        console.error(chalk.red('Invalid environment name. Use lowercase letters, numbers, hyphens, and underscores only.'));
+        process.exit(1);
+      }
+
       // If no tier specified interactively, prompt
       let tier = options.tier as EnvironmentDef['tier'];
       if (tier === 'custom' && !process.argv.includes('--tier')) {
@@ -116,6 +121,11 @@ export function registerEnvCommand(program: Command): void {
       const configManager = new ConfigManager();
       if (!configManager.exists()) {
         console.error(chalk.red("Error: Run 'configsync init' first."));
+        process.exit(1);
+      }
+
+      if (!isValidEnvName(name)) {
+        console.error(chalk.red('Invalid environment name. Use lowercase letters, numbers, hyphens, and underscores only.'));
         process.exit(1);
       }
 
@@ -300,16 +310,20 @@ export function registerEnvCommand(program: Command): void {
     .command('vars')
     .description('Output export statements for the current project/environment')
     .option('--for-shell', 'output in shell-eval-friendly format')
-    .action(() => {
+    .action((options: { forShell?: boolean }) => {
       const configManager = new ConfigManager();
       if (!configManager.exists()) {
-        console.error(chalk.red("Error: Run 'configsync init' first."));
-        process.exit(1);
+        if (!options.forShell) {
+          console.error(chalk.red("Error: Run 'configsync init' first."));
+        }
+        process.exit(options.forShell ? 0 : 1);
       }
 
       const injectDir = path.join(configManager.configDir, 'env_inject');
       if (!fs.existsSync(injectDir)) {
-        console.log(chalk.dim('No injected env vars found. Run "configsync pull" with inject_as_env projects first.'));
+        if (!options.forShell) {
+          console.log(chalk.dim('No injected env vars found. Run "configsync pull" with inject_as_env projects first.'));
+        }
         return;
       }
 
@@ -324,6 +338,7 @@ export function registerEnvCommand(program: Command): void {
 
           const vars = data.vars || {};
           for (const [key, value] of Object.entries(vars)) {
+            if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(key)) continue;
             console.log(`export ${key}=${JSON.stringify(value)}`);
           }
           return;
@@ -332,6 +347,8 @@ export function registerEnvCommand(program: Command): void {
         }
       }
 
-      console.log(chalk.dim('No matching project env vars for current directory.'));
+      if (!options.forShell) {
+        console.log(chalk.dim('No matching project env vars for current directory.'));
+      }
     });
 }

@@ -134,6 +134,22 @@ class CloudBackend {
     await this.request('DELETE', `/api/machines/${this.machineId}/actions`);
   }
 
+  async getEnvironments(): Promise<any[]> {
+    const response = await this.request('GET', '/api/environments');
+    if (!response.ok) return [];
+    const data = await response.json() as any;
+    return data.environments || [];
+  }
+
+  async syncEnvironments(environments: any[]): Promise<any[]> {
+    const response = await this.request('PUT', '/api/environments/sync', { environments });
+    if (!response.ok) {
+      throw new Error(`Failed to sync environments: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json() as any;
+    return data.environments || [];
+  }
+
   private async request(method: string, path: string, body?: any): Promise<Response> {
     const url = `${this.apiUrl}${path}`;
     const options: RequestInit = { method, headers: this.headers };

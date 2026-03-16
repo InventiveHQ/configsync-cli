@@ -10,6 +10,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { EnvironmentDef, Config } from './config.js';
 
+const ENV_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+export function isValidEnvName(name: string): boolean {
+  return ENV_NAME_RE.test(name) && name.length <= 64;
+}
+
 const TIER_COLORS: Record<string, string> = {
   development: '#22c55e',
   staging: '#eab308',
@@ -73,6 +79,9 @@ export class EnvironmentManager {
    * Writes ~/.configsync/active-env-tier (plain text tier)
    */
   activate(env: EnvironmentDef): void {
+    if (!isValidEnvName(env.name)) {
+      throw new Error(`Invalid environment name: ${env.name}`);
+    }
     fs.mkdirSync(this.configDir, { recursive: true });
     fs.writeFileSync(path.join(this.configDir, 'active-env'), env.name, 'utf-8');
     fs.writeFileSync(path.join(this.configDir, 'active-env-tier'), env.tier, 'utf-8');

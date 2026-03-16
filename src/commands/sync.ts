@@ -33,6 +33,9 @@ function describeAction(action: any): string {
       const name = pkg?.includes(':') ? pkg.split(':').slice(1).join(':') : pkg;
       return `Remove package: ${chalk.cyan(name)}`;
     }
+    case 'add_environment': return `Add environment: ${chalk.cyan(payload.name)} (${payload.tier})`;
+    case 'update_environment': return `Update environment: ${chalk.cyan(payload.name)}`;
+    case 'remove_environment': return `Remove environment: ${chalk.cyan(payload.name)}`;
     default:
       return `Unknown action: ${action.action}`;
   }
@@ -41,7 +44,7 @@ function describeAction(action: any): string {
 export function registerSyncCommand(program: Command): void {
   program
     .command('sync')
-    .description('Check for and apply pending actions from the dashboard')
+    .description('Bidirectional sync: merge local and cloud environments, then apply pending actions')
     .option('-y, --yes', 'Skip confirmation prompt')
     .action(async (options: { yes?: boolean }) => {
       const configManager = new ConfigManager();
@@ -68,6 +71,60 @@ export function registerSyncCommand(program: Command): void {
 
       const backend = new CloudBackend(apiUrl, apiKey);
 
+      // --- Bidirectional environment sync ---
+      const envSpinner = ora('Syncing environments...').start();
+      try {
+        const localEnvs = (config.environments || []).map(e => ({
+          name: e.name,
+          tier: e.tier,
+          color: e.color || null,
+          protect: !!e.protect,
+        }));
+
+        const merged = await backend.syncEnvironments(localEnvs);
+
+        // Merge cloud-only environments into local
+        if (!config.environments) config.environments = [];
+        const localNames = new Set(config.environments.map(e => e.name));
+        let added = 0;
+        let updated = 0;
+
+        for (const cloudEnv of merged) {
+          const existing = config.environments.find(e => e.name === cloudEnv.name);
+          if (!existing) {
+            config.environments.push({
+              name: cloudEnv.name,
+              tier: cloudEnv.tier,
+              color: cloudEnv.color,
+              protect: !!cloudEnv.protect,
+            });
+            added++;
+          }
+        }
+
+        // Remove local environments that were deleted on the cloud
+        const cloudNames = new Set(merged.map((e: any) => e.name));
+        const toRemove = config.environments.filter(e => !cloudNames.has(e.name));
+        for (const env of toRemove) {
+          const idx = config.environments.indexOf(env);
+          config.environments.splice(idx, 1);
+          updated++;
+        }
+
+        if (added > 0 || updated > 0) {
+          configManager.save(config);
+        }
+
+        const envParts: string[] = [];
+        if (added > 0) envParts.push(`${added} pulled from cloud`);
+        if (localEnvs.length > 0) envParts.push(`${localEnvs.length} pushed to cloud`);
+        if (toRemove.length > 0) envParts.push(`${toRemove.length} removed locally`);
+        envSpinner.succeed(`Environments synced! (${envParts.join(', ') || 'no changes'})`);
+      } catch (err: any) {
+        envSpinner.warn(`Environment sync failed: ${err.message}`);
+      }
+
+      // --- Pending actions (modules, packages, etc.) ---
       const spinner = ora('Checking for pending actions...').start();
 
       let actions: any[];
@@ -215,6 +272,62 @@ export function registerSyncCommand(program: Command): void {
             if (cmd) {
               console.log(chalk.dim(`    Install with: ${cmd}`));
             }
+            applied++;
+            break;
+          }
+
+          case 'add_environment': {
+            if (!config.environments) config.environments = [];
+            const existing = config.environments.find((e) => e.name === payload.name);
+            if (existing) {
+              console.log(chalk.dim(`  Environment "${payload.name}" already exists, skipping.`));
+              break;
+            }
+            config.environments.push({
+              name: payload.name,
+              tier: payload.tier || 'custom',
+              label: payload.label,
+              color: payload.color,
+              api_url: payload.api_url,
+              protect: !!payload.protect,
+            });
+            console.log(chalk.green(`  Added environment ${chalk.bold(payload.name)} (${payload.tier || 'custom'})`));
+            applied++;
+            break;
+          }
+
+          case 'update_environment': {
+            if (!config.environments) {
+              console.log(chalk.dim(`  No environments configured, skipping.`));
+              break;
+            }
+            const env = config.environments.find((e) => e.name === payload.name);
+            if (!env) {
+              console.log(chalk.dim(`  Environment "${payload.name}" not found, skipping.`));
+              break;
+            }
+            if (payload.tier !== undefined) env.tier = payload.tier;
+            if (payload.color !== undefined) env.color = payload.color;
+            if (payload.protect !== undefined) env.protect = payload.protect;
+            if (payload.label !== undefined) env.label = payload.label;
+            if (payload.api_url !== undefined) env.api_url = payload.api_url;
+            console.log(chalk.green(`  Updated environment ${chalk.bold(payload.name)}`));
+            applied++;
+            break;
+          }
+
+          case 'remove_environment': {
+            if (!config.environments) {
+              console.log(chalk.dim(`  No environments configured, skipping.`));
+              break;
+            }
+            const idx = config.environments.findIndex((e) => e.name === payload.name);
+            if (idx === -1) {
+              console.log(chalk.dim(`  Environment "${payload.name}" not found, skipping.`));
+              break;
+            }
+            config.environments.splice(idx, 1);
+            console.log(chalk.green(`  Removed environment ${chalk.bold(payload.name)}`));
             applied++;
             break;
           }

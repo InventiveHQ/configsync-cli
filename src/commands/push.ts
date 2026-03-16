@@ -267,7 +267,7 @@ export function registerPushCommand(program: Command): void {
           active_environment: activeEnvName || null,
           configs: capturedConfigs,
           repos: capturedRepos,
-          env_files: capturedEnvFiles,
+          env_files: activeEnvName ? [] : capturedEnvFiles,
           env_files_by_environment: envFilesByEnvironment,
           packages: config.packages || [],
           projects: capturedProjects,
@@ -311,6 +311,14 @@ export function registerPushCommand(program: Command): void {
             files: m.files.map((f: any) => ({ path: f.path, encrypt: f.encrypt })),
             extras: m.extras || null,
           })),
+          environments: (config.environments || []).map((e: any) => ({
+            name: e.name,
+            tier: e.tier,
+            label: e.label || null,
+            color: e.color || null,
+            api_url: e.api_url || null,
+            protect: !!e.protect,
+          })),
           env_vars: Object.keys(capturedEnvVars),
           machine_vars: config.machine || null,
           active_environment: activeEnvName || null,
@@ -328,6 +336,35 @@ export function registerPushCommand(program: Command): void {
           const backend = new CloudBackend(apiUrl, apiKey);
           await backend.registerMachine();
           await backend.push(state, cryptoManager, metadata);
+
+          // Sync environments: push local → cloud, merge cloud-only back to local
+          if (config.environments && config.environments.length > 0) {
+            const merged = await backend.syncEnvironments(
+              config.environments.map(e => ({
+                name: e.name,
+                tier: e.tier,
+                color: e.color || null,
+                protect: !!e.protect,
+              }))
+            );
+            // Merge cloud-only environments back into local config
+            const localNames = new Set((config.environments || []).map(e => e.name));
+            let newFromCloud = 0;
+            for (const cloudEnv of merged) {
+              if (!localNames.has(cloudEnv.name)) {
+                config.environments.push({
+                  name: cloudEnv.name,
+                  tier: cloudEnv.tier,
+                  color: cloudEnv.color,
+                  protect: !!cloudEnv.protect,
+                });
+                newFromCloud++;
+              }
+            }
+            if (newFromCloud > 0) {
+              configManager.save(config);
+            }
+          }
         } else {
           const stateFile = path.join(configManager.stateDir, 'state.json');
           fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
