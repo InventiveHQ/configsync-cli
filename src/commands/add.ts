@@ -50,30 +50,53 @@ export function registerAddCommand(program: Command): void {
         }
       }
 
-      // Detect .env files
-      const envPatterns = ['.env', '.env.local', '.env.development', '.env.production'];
-      for (const envName of envPatterns) {
-        const envPath = path.join(resolved, envName);
-        if (fs.existsSync(envPath)) {
+      // Files that contain secrets — always encrypt
+      const sensitiveFiles = [
+        '.env', '.env.local', '.env.development', '.env.production', '.env.staging', '.env.test',
+        '.dev.vars',        // Cloudflare Workers secrets
+        '.mcp.json',        // MCP server configs (may contain tokens)
+      ];
+
+      for (const name of sensitiveFiles) {
+        const filePath = path.join(resolved, name);
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
           const alreadyTracked = config.env_files.find(
-            e => resolveHome(e.project_path) === resolved && e.filename === envName
-          );
+            e => resolveHome(e.project_path) === resolved && e.filename === name
+          ) || config.configs.find(c => c.source === path.join(folder, name));
           if (!alreadyTracked) {
-            config.env_files.push({ project_path: folder, filename: envName, encrypt: true });
-            console.log(chalk.green(`  + env: ${envName} (encrypted)`));
+            config.env_files.push({ project_path: folder, filename: name, encrypt: true });
+            console.log(chalk.green(`  + secret: ${name} (encrypted)`));
             added++;
           } else {
-            console.log(chalk.dim(`  - env already tracked: ${envName}`));
+            console.log(chalk.dim(`  - already tracked: ${name}`));
           }
         }
       }
 
-      // Detect common dotfiles/config files in the folder root
+      // Files/dirs to skip entirely (build artifacts, caches, IDE config)
+      const ignoreList = new Set([
+        '.git', '.DS_Store', '.gitignore', '.gitattributes', '.gitmodules',
+        '.node_modules', '.next', '.vscode', '.idea', '.turbo',
+        '.wrangler', '.open-next', '.vercel', '.netlify',
+        '.build-trigger', '.trigger-deploy',
+        '.cache', '.parcel-cache', '.eslintcache',
+        // Sensitive files handled above
+        ...sensitiveFiles,
+      ]);
+
+      // Also skip files matching common cache/build patterns
+      const ignorePatterns = [
+        /^\.tool-/,         // .tool-build-cache.json, .tool-deploy-cache.json, etc.
+        /^\.qa-/,           // .qa-checkpoint.json, etc.
+        /-cache\.json$/,
+        /-trigger$/,
+      ];
+
+      // Detect dotfiles/config files worth syncing
       const dotfiles = fs.readdirSync(resolved).filter(f => {
         if (!f.startsWith('.')) return false;
-        if (['.git', '.env', '.env.local', '.env.development', '.env.production',
-             '.DS_Store', '.gitignore', '.gitattributes', '.gitmodules',
-             '.node_modules', '.next', '.vscode', '.idea'].includes(f)) return false;
+        if (ignoreList.has(f)) return false;
+        if (ignorePatterns.some(p => p.test(f))) return false;
         const full = path.join(resolved, f);
         return fs.statSync(full).isFile();
       });
