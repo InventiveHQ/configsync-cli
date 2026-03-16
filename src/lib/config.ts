@@ -26,6 +26,7 @@ export interface ConfigItem {
   source: string;
   encrypt?: boolean;
   exclude_patterns?: string[];
+  template?: boolean;
 }
 
 export interface EnvFileConfig {
@@ -49,6 +50,7 @@ export interface ProjectConfig {
   };
   secrets: string[];      // encrypted files: [".env.local", ".dev.vars", ".mcp.json"]
   configs: string[];      // regular dotfiles: [".eslintrc.json", ".env.example"]
+  inject_as_env?: boolean; // if true, inject as shell env vars instead of writing .env files
 }
 
 export interface ModuleConfig {
@@ -63,6 +65,26 @@ export interface GroupConfig {
   projects: ProjectConfig[]; // child projects within this group
 }
 
+export interface EnvironmentDef {
+  name: string;           // "dev", "staging", "prod"
+  tier: 'development' | 'staging' | 'production' | 'custom';
+  label?: string;         // Display: "PRODUCTION"
+  color?: string;         // hex: "#ef4444"
+  api_url?: string;       // per-env API override
+  api_key?: string;       // per-env key override
+  protect?: boolean;      // require type-name confirmation
+}
+
+export interface MachineConfig {
+  tags: string[];
+  vars: Record<string, string>;
+}
+
+export interface TerminalEffects {
+  background?: boolean;
+  status_bar?: boolean;
+}
+
 export interface Config {
   version: string;
   profile: string;
@@ -75,6 +97,11 @@ export interface Config {
   projects?: ProjectConfig[];
   groups?: GroupConfig[];
   modules?: ModuleConfig[];
+  machine?: MachineConfig;
+  environments?: EnvironmentDef[];
+  package_exclude?: string[];
+  package_mappings?: Record<string, Record<string, string>>[];
+  terminal_effects?: TerminalEffects;
 }
 
 // ---------------------------------------------------------------------------

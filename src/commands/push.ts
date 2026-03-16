@@ -44,14 +44,12 @@ export function registerPushCommand(program: Command): void {
           if (!fs.statSync(resolvedPath).isFile()) continue;
 
           let content: Buffer = Buffer.from(fs.readFileSync(resolvedPath));
-          if (item.encrypt) {
-            content = Buffer.from(cryptoManager.encrypt(content));
-          }
+          content = Buffer.from(cryptoManager.encrypt(content));
 
           capturedConfigs.push({
             source: item.source,
             content: content.toString('base64'),
-            encrypted: !!item.encrypt,
+            encrypted: true,
           });
         }
 
@@ -94,16 +92,13 @@ export function registerPushCommand(program: Command): void {
           if (!fs.existsSync(envPath)) continue;
 
           let content: Buffer = Buffer.from(fs.readFileSync(envPath));
-          const shouldEncrypt = env.encrypt !== false;
-          if (shouldEncrypt) {
-            content = Buffer.from(cryptoManager.encrypt(content));
-          }
+          content = Buffer.from(cryptoManager.encrypt(content));
 
           capturedEnvFiles.push({
             project_path: env.project_path,
             filename: env.filename || '.env.local',
             content: content.toString('base64'),
-            encrypted: shouldEncrypt,
+            encrypted: true,
           });
         }
 
@@ -132,15 +127,16 @@ export function registerPushCommand(program: Command): void {
             });
           }
 
-          // Capture project configs (not encrypted by default)
+          // Capture project configs (all encrypted)
           for (const configName of project.configs) {
             const configPath = path.join(projectPath, configName);
             if (!fs.existsSync(configPath)) continue;
             let content: Buffer = Buffer.from(fs.readFileSync(configPath));
+            content = Buffer.from(cryptoManager.encrypt(content));
             capturedProject.configs.push({
               filename: configName,
               content: content.toString('base64'),
-              encrypted: false,
+              encrypted: true,
             });
           }
 
@@ -189,7 +185,7 @@ export function registerPushCommand(program: Command): void {
             for (const configName of project.configs) {
               const configPath = path.join(projectPath, configName);
               if (!fs.existsSync(configPath)) continue;
-              cp.configs.push({ filename: configName, content: Buffer.from(fs.readFileSync(configPath)).toString('base64'), encrypted: false });
+              cp.configs.push({ filename: configName, content: Buffer.from(cryptoManager.encrypt(Buffer.from(fs.readFileSync(configPath)))).toString('base64'), encrypted: true });
             }
 
             if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
@@ -221,14 +217,12 @@ export function registerPushCommand(program: Command): void {
             if (!fs.statSync(resolvedPath).isFile()) continue;
 
             let content: Buffer = Buffer.from(fs.readFileSync(resolvedPath));
-            if (file.encrypt) {
-              content = Buffer.from(cryptoManager.encrypt(content));
-            }
+            content = Buffer.from(cryptoManager.encrypt(content));
 
             capturedMod.files.push({
               path: file.path,
               content: content.toString('base64'),
-              encrypted: file.encrypt,
+              encrypted: true,
             });
           }
 
