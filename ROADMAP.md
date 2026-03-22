@@ -81,7 +81,7 @@ Core functionality implemented, preparing for public release.
 - [ ] Migration tools from competitors
 
 ## Community Requests
-Track feature requests at: https://github.com/developersync/devsync-cli/issues
+Track feature requests at: https://planetroadmap.com/p/configsync
 
 ## Version History
 
