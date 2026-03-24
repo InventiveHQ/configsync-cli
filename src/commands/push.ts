@@ -14,6 +14,7 @@ import { requireConfirmation } from '../lib/safety.js';
 import { renderBanner } from '../lib/banner.js';
 import { HashCacheManager, mergeWithPrevious, type HashCache } from '../lib/hash-cache.js';
 import { parseFilters, shouldInclude, type Filter } from '../lib/filter.js';
+import { executeHooks } from '../lib/hooks.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
@@ -455,6 +456,12 @@ export async function performPush(
     fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
   }
 
+  // Capture bootstrap script if it exists
+  const bootstrapPath = path.join(configManager.configDir, 'bootstrap.sh');
+  if (fs.existsSync(bootstrapPath)) {
+    state.bootstrap_script = fs.readFileSync(bootstrapPath, 'utf-8');
+  }
+
   // Save hash cache after successful push
   hashCacheManager.save(cache);
 
@@ -506,6 +513,14 @@ export function registerPushCommand(program: Command): void {
       const cryptoManager = new CryptoManager(configManager.configDir);
       cryptoManager.unlock(password);
 
+      // Pre-push hooks (abort on failure)
+      try {
+        await executeHooks('pre_push', config, { env: activeEnv?.name, profile: program.opts().profile });
+      } catch (err: any) {
+        console.error(chalk.red(`Pre-push hook failed: ${err.message}`));
+        process.exit(1);
+      }
+
       const spinner = ora('Pushing state...').start();
 
       try {
@@ -521,6 +536,9 @@ export function registerPushCommand(program: Command): void {
         ].filter(p => !p.startsWith('0'));
 
         spinner.succeed(`State pushed! (${parts.join(', ')})`);
+
+        // Post-push hooks (warn on failure)
+        await executeHooks('post_push', config, { continueOnError: true, env: activeEnv?.name, profile: program.opts().profile });
       } catch (err: any) {
         spinner.fail(`Push failed: ${err.message}`);
         process.exit(1);

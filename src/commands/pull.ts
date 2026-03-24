@@ -21,6 +21,8 @@ import { diffPackages, formatDiff } from '../lib/package-diff.js';
 import { loadMappings } from '../lib/package-mappings.js';
 import { parseFilters, shouldInclude, isFilterActive, type Filter } from '../lib/filter.js';
 import { getRestoreLevels } from '../lib/dependency-graph.js';
+import { executeHooks } from '../lib/hooks.js';
+import { runBootstrapIfNeeded } from '../lib/bootstrap.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
@@ -386,6 +388,8 @@ export function registerPullCommand(program: Command): void {
     .option('--dry-run', 'preview what would be restored without making changes')
     .option('--filter <filters...>', 'only pull specific items (e.g. modules:ssh,configs)')
     .option('--snapshot <id>', 'restore a specific snapshot by ID')
+    .option('--skip-bootstrap', 'skip bootstrap script execution')
+    .option('--rerun-bootstrap', 'force re-run bootstrap even if already done')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
     .action(async (options: {
       force: boolean;
@@ -402,6 +406,8 @@ export function registerPullCommand(program: Command): void {
       dryRun?: boolean;
       filter?: string[];
       snapshot?: string;
+      skipBootstrap?: boolean;
+      rerunBootstrap?: boolean;
       iKnowWhatImDoing?: boolean;
     }) => {
       const configManager = new ConfigManager();
@@ -572,7 +578,21 @@ export function registerPullCommand(program: Command): void {
           return;
         }
 
-        spinner.text = 'Restoring...';
+        // Pre-pull hooks (abort on failure)
+        spinner.stop();
+        try {
+          await executeHooks('pre_pull', config, { env: activeEnvName || undefined, profile: program.opts().profile });
+        } catch (err: any) {
+          console.error(chalk.red(`Pre-pull hook failed: ${err.message}`));
+          process.exit(1);
+        }
+        spinner.start('Restoring...');
+
+        // Write bootstrap script from state if present
+        if (state.bootstrap_script) {
+          const bootstrapPath = path.join(configManager.configDir, 'bootstrap.sh');
+          fs.writeFileSync(bootstrapPath, state.bootstrap_script, { mode: 0o755 });
+        }
 
         // Build template context
         const templateContext = buildContext(config.machine, activeProfile);
@@ -630,6 +650,21 @@ export function registerPullCommand(program: Command): void {
 
         if (state.timestamp) console.log(`  ${chalk.dim('Snapshot from:')} ${state.timestamp}`);
         if (state.message) console.log(`  ${chalk.dim('Message:')} ${state.message}`);
+
+        // Post-pull hooks (warn on failure)
+        await executeHooks('post_pull', config, { continueOnError: true, env: activeEnvName || undefined, profile: program.opts().profile });
+
+        // Bootstrap script
+        if (!options.skipBootstrap) {
+          try {
+            const result = await runBootstrapIfNeeded(config, configManager, { force: options.rerunBootstrap });
+            if (result.ran) {
+              console.log(chalk.green('\n  Bootstrap script completed.'));
+            }
+          } catch (err: any) {
+            console.log(chalk.yellow(`\n  Bootstrap script failed: ${err.message}`));
+          }
+        }
 
         // Package reconciliation
         if (shouldInclude('packages', undefined, filters) && state.packages?.length && !isFilterActive(filters.filter(f => f.type !== 'packages')) && options.packages !== false) {

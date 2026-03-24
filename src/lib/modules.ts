@@ -280,6 +280,164 @@ const modules: ModuleDef[] = [
       homeFile('.docker/config.json', true),  // encrypt — contains registry auth
     ],
   },
+  {
+    name: 'iterm2',
+    displayName: 'iTerm2',
+    description: 'iTerm2 preferences and profiles',
+    detect: () => os.platform() === 'darwin' && fs.existsSync(path.join(os.homedir(), 'Library', 'Preferences', 'com.googlecode.iterm2.plist')),
+    getFiles: () => {
+      const plist = path.join(os.homedir(), 'Library', 'Preferences', 'com.googlecode.iterm2.plist');
+      return [{
+        path: plist,
+        relative: '~/Library/Preferences/com.googlecode.iterm2.plist',
+        encrypt: false,
+        exists: fs.existsSync(plist),
+      }];
+    },
+  },
+  {
+    name: 'alacritty',
+    displayName: 'Alacritty',
+    description: 'Alacritty terminal config',
+    detect: () =>
+      fs.existsSync(path.join(os.homedir(), '.config', 'alacritty', 'alacritty.toml'))
+      || fs.existsSync(path.join(os.homedir(), '.config', 'alacritty', 'alacritty.yml')),
+    getFiles: () => [
+      homeFile('.config/alacritty/alacritty.toml', false),
+      homeFile('.config/alacritty/alacritty.yml', false),
+    ],
+  },
+  {
+    name: 'tmux',
+    displayName: 'tmux',
+    description: 'tmux configuration',
+    detect: () =>
+      fs.existsSync(path.join(os.homedir(), '.tmux.conf'))
+      || fs.existsSync(path.join(os.homedir(), '.config', 'tmux', 'tmux.conf')),
+    getFiles: () => [
+      homeFile('.tmux.conf', false),
+      homeFile('.config/tmux/tmux.conf', false),
+    ],
+  },
+  {
+    name: 'sublime',
+    displayName: 'Sublime Text',
+    description: 'Sublime Text preferences and keybindings',
+    detect: () => {
+      if (os.platform() === 'darwin') {
+        return fs.existsSync(path.join(os.homedir(), 'Library', 'Application Support', 'Sublime Text', 'Packages', 'User'));
+      }
+      return fs.existsSync(path.join(os.homedir(), '.config', 'sublime-text', 'Packages', 'User'));
+    },
+    getFiles: () => {
+      if (os.platform() === 'darwin') {
+        return [
+          appSupportFile('Sublime Text/Packages/User/Preferences.sublime-settings', false),
+          appSupportFile('Sublime Text/Packages/User/Default (OSX).sublime-keymap', false),
+        ];
+      }
+      return [
+        homeFile('.config/sublime-text/Packages/User/Preferences.sublime-settings', false),
+        homeFile('.config/sublime-text/Packages/User/Default (Linux).sublime-keymap', false),
+      ];
+    },
+  },
+  {
+    name: 'jetbrains',
+    displayName: 'JetBrains IDEs',
+    description: 'IdeaVim config and global settings',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.ideavimrc')),
+    getFiles: () => [
+      homeFile('.ideavimrc', false),
+    ],
+  },
+  {
+    name: 'starship',
+    displayName: 'Starship',
+    description: 'Starship prompt configuration',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.config', 'starship.toml')),
+    getFiles: () => [
+      homeFile('.config/starship.toml', false),
+    ],
+  },
+  {
+    name: 'homebrew',
+    displayName: 'Homebrew',
+    description: 'Homebrew Brewfile for reproducible installs',
+    detect: () => {
+      try {
+        execSync('brew --version', { stdio: 'pipe', timeout: 5000 });
+        return true;
+      } catch { return false; }
+    },
+    getFiles: () => [
+      homeFile('.Brewfile', false),
+    ],
+    getExtras: () => {
+      try {
+        const output = execSync('brew bundle dump --file=- --no-upgrade 2>/dev/null', {
+          encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+        });
+        return { brewfile: output };
+      } catch {
+        return { brewfile: '' };
+      }
+    },
+  },
+  {
+    name: 'karabiner',
+    displayName: 'Karabiner-Elements',
+    description: 'Karabiner keyboard customization (macOS)',
+    detect: () => os.platform() === 'darwin' && fs.existsSync(path.join(os.homedir(), '.config', 'karabiner', 'karabiner.json')),
+    getFiles: () => [
+      homeFile('.config/karabiner/karabiner.json', false),
+    ],
+  },
+  {
+    name: 'bat',
+    displayName: 'bat',
+    description: 'bat (cat alternative) configuration',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.config', 'bat', 'config')),
+    getFiles: () => [
+      homeFile('.config/bat/config', false),
+    ],
+  },
+  {
+    name: 'gpg',
+    displayName: 'GPG',
+    description: 'GPG configuration and agent settings',
+    detect: () => fs.existsSync(path.join(os.homedir(), '.gnupg')),
+    getFiles: () => [
+      homeFile('.gnupg/gpg.conf', true),
+      homeFile('.gnupg/gpg-agent.conf', true),
+    ],
+  },
+  {
+    name: 'raycast',
+    displayName: 'Raycast',
+    description: 'Raycast launcher settings (macOS)',
+    detect: () => os.platform() === 'darwin' && fs.existsSync(path.join(os.homedir(), 'Library', 'Application Support', 'com.raycast.macos')),
+    getFiles: () => {
+      const dir = path.join(os.homedir(), 'Library', 'Application Support', 'com.raycast.macos');
+      const files: ModuleFile[] = [];
+      if (fs.existsSync(dir)) {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.endsWith('.json') || f.endsWith('.plist')) {
+            const full = path.join(dir, f);
+            if (fs.statSync(full).isFile()) {
+              files.push({
+                path: full,
+                relative: `~/Library/Application Support/com.raycast.macos/${f}`,
+                encrypt: false,
+                exists: true,
+              });
+            }
+          }
+        }
+      }
+      return files;
+    },
+  },
 ];
 
 export function listModules(): ModuleInfo[] {

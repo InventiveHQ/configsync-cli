@@ -18,6 +18,8 @@ import { registerEnvCommand } from './env.js';
 import { registerProfileCommand } from './profile.js';
 import { registerHistoryCommand } from './history.js';
 import { registerWatchCommand } from './watch.js';
+import { registerDiffCommand } from './diff.js';
+import { registerSetupCommand } from './setup.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -39,4 +41,6 @@ export function registerCommands(program: Command): void {
   registerProfileCommand(program);
   registerHistoryCommand(program);
   registerWatchCommand(program);
+  registerDiffCommand(program);
+  registerSetupCommand(program);
 }

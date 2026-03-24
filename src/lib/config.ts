@@ -113,6 +113,16 @@ export interface Config {
   package_mappings?: Record<string, Record<string, string>>[];
   terminal_effects?: TerminalEffects;
   profiles?: ProfileDef[];
+  hooks?: {
+    pre_push?: string[];
+    post_push?: string[];
+    pre_pull?: string[];
+    post_pull?: string[];
+  };
+  bootstrap?: {
+    script?: string;      // path to bootstrap script (default: ~/.configsync/bootstrap.sh)
+    auto_run?: boolean;   // run on first pull without prompting (default: false)
+  };
 }
 
 // ---------------------------------------------------------------------------
