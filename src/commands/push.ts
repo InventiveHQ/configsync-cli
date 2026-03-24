@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import ora from 'ora';
+import ora, { type Ora } from 'ora';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -12,10 +12,463 @@ import { promptPassword } from '../lib/prompt.js';
 import { EnvironmentManager } from '../lib/environment.js';
 import { requireConfirmation } from '../lib/safety.js';
 import { renderBanner } from '../lib/banner.js';
+import { HashCacheManager, mergeWithPrevious, type HashCache } from '../lib/hash-cache.js';
+import { parseFilters, shouldInclude, type Filter } from '../lib/filter.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
 }
+
+// --- Capture functions (extracted for parallelism) ---
+
+function encryptFile(
+  filePath: string,
+  sourceKey: string,
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): { content: string; encrypted: true } {
+  if (!noCache) {
+    const result = hashCacheManager.check(filePath, sourceKey, cache);
+    if (!result.changed && result.cachedContent) {
+      return { content: result.cachedContent, encrypted: true };
+    }
+    // Changed or no cache entry — encrypt and update cache
+    const raw = fs.readFileSync(filePath);
+    const encrypted = Buffer.from(cryptoManager.encrypt(raw));
+    const base64 = encrypted.toString('base64');
+    hashCacheManager.update(cache, sourceKey, result.sha256, result.size, result.mtime, base64);
+    return { content: base64, encrypted: true };
+  }
+  // No cache mode — always encrypt
+  const raw = fs.readFileSync(filePath);
+  const encrypted = Buffer.from(cryptoManager.encrypt(raw));
+  return { content: encrypted.toString('base64'), encrypted: true };
+}
+
+async function captureConfigs(
+  configs: any[],
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Promise<Record<string, any>[]> {
+  const results: Record<string, any>[] = [];
+  for (const item of configs) {
+    const resolvedPath = resolveHome(item.source);
+    if (!fs.existsSync(resolvedPath)) continue;
+    if (!fs.statSync(resolvedPath).isFile()) continue;
+
+    const { content, encrypted } = encryptFile(resolvedPath, `config:${item.source}`, cryptoManager, cache, hashCacheManager, noCache);
+    results.push({ source: item.source, content, encrypted });
+  }
+  return results;
+}
+
+async function captureRepos(repos: any[]): Promise<Record<string, any>[]> {
+  const results: Record<string, any>[] = [];
+  for (const repo of repos) {
+    const repoPath = resolveHome(repo.path);
+    const repoState: Record<string, any> = {
+      url: repo.url,
+      path: repo.path,
+      branch: repo.branch || 'main',
+      auto_pull: repo.auto_pull !== false,
+    };
+
+    if (fs.existsSync(path.join(repoPath, '.git'))) {
+      try {
+        repoState.current_branch = execSync('git branch --show-current', {
+          cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        repoState.commit = execSync('git rev-parse HEAD', {
+          cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        const status = execSync('git status --porcelain', {
+          cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        repoState.has_uncommitted = status.trim().length > 0;
+      } catch {
+        // Git commands failed, just save the config
+      }
+    }
+
+    results.push(repoState);
+  }
+  return results;
+}
+
+async function captureEnvFiles(
+  envFiles: any[],
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Promise<Record<string, any>[]> {
+  const results: Record<string, any>[] = [];
+  for (const env of envFiles) {
+    const envPath = path.join(resolveHome(env.project_path), env.filename || '.env.local');
+    if (!fs.existsSync(envPath)) continue;
+
+    const sourceKey = `env:${env.project_path}/${env.filename || '.env.local'}`;
+    const { content, encrypted } = encryptFile(envPath, sourceKey, cryptoManager, cache, hashCacheManager, noCache);
+    results.push({
+      project_path: env.project_path,
+      filename: env.filename || '.env.local',
+      content,
+      encrypted,
+    });
+  }
+  return results;
+}
+
+function captureProjectFiles(
+  project: any,
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Record<string, any> {
+  const projectPath = resolveHome(project.path);
+  const capturedProject: Record<string, any> = {
+    name: project.name,
+    path: project.path,
+    repo: project.repo || null,
+    secrets: [],
+    configs: [],
+  };
+
+  for (const secretName of project.secrets) {
+    const secretPath = path.join(projectPath, secretName);
+    if (!fs.existsSync(secretPath)) continue;
+    const sourceKey = `project:${project.name}:secret:${secretName}`;
+    const { content, encrypted } = encryptFile(secretPath, sourceKey, cryptoManager, cache, hashCacheManager, noCache);
+    capturedProject.secrets.push({ filename: secretName, content, encrypted });
+  }
+
+  for (const configName of project.configs) {
+    const configPath = path.join(projectPath, configName);
+    if (!fs.existsSync(configPath)) continue;
+    const sourceKey = `project:${project.name}:config:${configName}`;
+    const { content, encrypted } = encryptFile(configPath, sourceKey, cryptoManager, cache, hashCacheManager, noCache);
+    capturedProject.configs.push({ filename: configName, content, encrypted });
+  }
+
+  if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
+    try {
+      capturedProject.repo.current_branch = execSync('git branch --show-current', {
+        cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      capturedProject.repo.commit = execSync('git rev-parse HEAD', {
+        cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch {}
+  }
+
+  return capturedProject;
+}
+
+async function captureProjects(
+  projects: any[],
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Promise<Record<string, any>[]> {
+  return projects.map(p => captureProjectFiles(p, cryptoManager, cache, hashCacheManager, noCache));
+}
+
+async function captureGroups(
+  groups: any[],
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Promise<Record<string, any>[]> {
+  return groups.map(group => ({
+    name: group.name,
+    path: group.path,
+    projects: group.projects.map((p: any) => captureProjectFiles(p, cryptoManager, cache, hashCacheManager, noCache)),
+  }));
+}
+
+async function captureModules(
+  modules: any[],
+  cryptoManager: CryptoManager,
+  cache: HashCache,
+  hashCacheManager: HashCacheManager,
+  noCache: boolean,
+): Promise<Record<string, any>[]> {
+  const results: Record<string, any>[] = [];
+  for (const mod of modules) {
+    const capturedMod: Record<string, any> = {
+      name: mod.name,
+      files: [],
+      extras: mod.extras || null,
+    };
+
+    for (const file of mod.files) {
+      const filePath = file.path.replace(/^~/, os.homedir());
+      const resolvedPath = path.resolve(filePath);
+      if (!fs.existsSync(resolvedPath)) continue;
+      if (!fs.statSync(resolvedPath).isFile()) continue;
+
+      const sourceKey = `module:${mod.name}:${file.path}`;
+      const { content, encrypted } = encryptFile(resolvedPath, sourceKey, cryptoManager, cache, hashCacheManager, noCache);
+      capturedMod.files.push({ path: file.path, content, encrypted });
+    }
+
+    results.push(capturedMod);
+  }
+  return results;
+}
+
+function captureEnvVars(envVarNames: string[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const varName of envVarNames) {
+    const value = process.env[varName];
+    if (value !== undefined) {
+      result[varName] = value;
+    }
+  }
+  return result;
+}
+
+// --- Core push logic (exported for watch mode) ---
+
+export interface PushOptions {
+  message?: string;
+  yes?: boolean;
+  noDelete?: boolean;
+  iKnowWhatImDoing?: boolean;
+  noCache?: boolean;
+  filter?: string[];
+  changed?: boolean;
+}
+
+export interface PushStats {
+  configs: number;
+  repos: number;
+  envFiles: number;
+  projects: number;
+  groups: number;
+  modules: number;
+}
+
+export async function performPush(
+  config: any,
+  configManager: ConfigManager,
+  cryptoManager: CryptoManager,
+  envManager: EnvironmentManager,
+  program: Command,
+  options: PushOptions,
+  spinner?: Ora,
+): Promise<PushStats> {
+  const hashCacheManager = new HashCacheManager(configManager.stateDir);
+  const cache = hashCacheManager.load();
+  const noCache = !!options.noCache;
+  const filters = parseFilters(options.filter || []);
+
+  // Parallel capture of independent sections
+  const [capturedConfigs, capturedEnvFiles, capturedModules] = await Promise.all([
+    shouldInclude('configs', undefined, filters)
+      ? captureConfigs(config.configs, cryptoManager, cache, hashCacheManager, noCache)
+      : Promise.resolve([]),
+    shouldInclude('env_files', undefined, filters)
+      ? captureEnvFiles(config.env_files, cryptoManager, cache, hashCacheManager, noCache)
+      : Promise.resolve([]),
+    shouldInclude('modules', undefined, filters)
+      ? captureModules(config.modules || [], cryptoManager, cache, hashCacheManager, noCache)
+      : Promise.resolve([]),
+  ]);
+
+  // Repos use execSync (blocking) — run after parallel batch
+  const capturedRepos = shouldInclude('repos', undefined, filters)
+    ? await captureRepos(config.repos)
+    : [];
+
+  // Projects and groups can run in parallel with each other
+  const [capturedProjects, capturedGroups] = await Promise.all([
+    shouldInclude('projects', undefined, filters)
+      ? captureProjects(config.projects || [], cryptoManager, cache, hashCacheManager, noCache)
+      : Promise.resolve([]),
+    shouldInclude('groups', undefined, filters)
+      ? captureGroups(config.groups || [], cryptoManager, cache, hashCacheManager, noCache)
+      : Promise.resolve([]),
+  ]);
+
+  const capturedEnvVars = captureEnvVars(config.env_vars || []);
+
+  // Environment-scoped secrets
+  const activeEnv = envManager.getActive(config, program.opts().env);
+  const activeEnvName = activeEnv?.name || envManager.resolve(program.opts().env);
+  const envFilesByEnvironment: Record<string, any[]> = {};
+  if (activeEnvName) {
+    envFilesByEnvironment[activeEnvName] = capturedEnvFiles;
+  }
+
+  let state: Record<string, any> = {
+    timestamp: new Date().toISOString(),
+    message: options.message || '',
+    active_environment: activeEnvName || null,
+    configs: capturedConfigs,
+    repos: capturedRepos,
+    env_files: activeEnvName ? [] : capturedEnvFiles,
+    env_files_by_environment: envFilesByEnvironment,
+    packages: config.packages || [],
+    projects: capturedProjects,
+    groups: capturedGroups,
+    modules: capturedModules,
+    env_vars: capturedEnvVars,
+    machine_vars: config.machine || null,
+    profiles: config.profiles || [],
+  };
+
+  // --changed: merge with previous state for unchanged items
+  if (options.changed) {
+    let previousState: Record<string, any> | null = null;
+    if (config.sync.backend === 'cloud') {
+      const apiUrl = config.sync.config.api_url;
+      const apiKey = config.sync.config.api_key;
+      if (apiUrl && apiKey) {
+        const backend = new CloudBackend(apiUrl, apiKey);
+        previousState = await backend.pull(cryptoManager);
+      }
+    } else {
+      const stateFile = path.join(configManager.stateDir, 'state.json');
+      if (fs.existsSync(stateFile)) {
+        previousState = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      }
+    }
+    if (previousState) {
+      state.configs = mergeWithPrevious(capturedConfigs, previousState.configs || [], 'source');
+      state.repos = mergeWithPrevious(capturedRepos, previousState.repos || [], 'path');
+      state.env_files = mergeWithPrevious(
+        activeEnvName ? [] : capturedEnvFiles,
+        previousState.env_files || [],
+        'project_path',
+      );
+      state.modules = mergeWithPrevious(capturedModules, previousState.modules || [], 'name');
+      state.projects = mergeWithPrevious(capturedProjects, previousState.projects || [], 'name');
+      state.groups = mergeWithPrevious(capturedGroups, previousState.groups || [], 'name');
+    }
+  }
+
+  const metadata = {
+    timestamp: state.timestamp,
+    configs: capturedConfigs.map((c: any) => ({ source: c.source, encrypted: !!c.encrypted })),
+    repos: capturedRepos.map((r: any) => ({ url: r.url, path: r.path, branch: r.branch || r.current_branch })),
+    env_files: capturedEnvFiles.map((e: any) => ({ project_path: e.project_path, filename: e.filename })),
+    packages: (config.packages || []).map((p: any) => ({
+      manager: p.manager,
+      displayName: p.displayName,
+      count: p.packages.length,
+      items: p.packages,
+    })),
+    projects: (config.projects || []).map((p: any) => ({
+      name: p.name,
+      path: p.path,
+      repo: p.repo || null,
+      secrets: p.secrets,
+      configs: p.configs,
+    })),
+    groups: (config.groups || []).map((g: any) => ({
+      name: g.name,
+      path: g.path,
+      projects: g.projects.map((p: any) => ({
+        name: p.name,
+        path: p.path,
+        repo: p.repo || null,
+        secrets: p.secrets,
+        configs: p.configs,
+      })),
+    })),
+    modules: (config.modules || []).map((m: any) => ({
+      name: m.name,
+      files: m.files.map((f: any) => ({ path: f.path, encrypt: f.encrypt })),
+      extras: m.extras || null,
+    })),
+    environments: (config.environments || []).map((e: any) => ({
+      name: e.name,
+      tier: e.tier,
+      label: e.label || null,
+      color: e.color || null,
+      api_url: e.api_url || null,
+      protect: !!e.protect,
+    })),
+    env_vars: Object.keys(capturedEnvVars),
+    machine_vars: config.machine || null,
+    active_environment: activeEnvName || null,
+    profiles: (config.profiles || []).map((p: any) => ({
+      name: p.name,
+      environment: p.environment || null,
+      paths: p.paths || [],
+      vars: p.vars || {},
+      env_overrides: p.env_overrides ? Object.keys(p.env_overrides).reduce((acc: Record<string, string>, k: string) => { acc[k] = '***'; return acc; }, {}) : {},
+      description: p.description || null,
+    })),
+  };
+
+  if (config.sync.backend === 'cloud') {
+    const apiUrl = config.sync.config.api_url;
+    const apiKey = config.sync.config.api_key;
+
+    if (!apiUrl || !apiKey) {
+      throw new Error('Cloud backend not configured. Run "configsync login" first.');
+    }
+
+    const backend = new CloudBackend(apiUrl, apiKey);
+    await backend.registerMachine();
+    await backend.push(state, cryptoManager, metadata);
+
+    // Sync environments: push local → cloud, merge cloud-only back to local
+    if (config.environments && config.environments.length > 0) {
+      const merged = await backend.syncEnvironments(
+        config.environments.map((e: any) => ({
+          name: e.name,
+          tier: e.tier,
+          color: e.color || null,
+          protect: !!e.protect,
+        })),
+        { deleteCloudOnly: !options.noDelete },
+      );
+      const localNames = new Set((config.environments || []).map((e: any) => e.name));
+      let newFromCloud = 0;
+      for (const cloudEnv of merged) {
+        if (!localNames.has(cloudEnv.name)) {
+          config.environments.push({
+            name: cloudEnv.name,
+            tier: cloudEnv.tier,
+            color: cloudEnv.color,
+            protect: !!cloudEnv.protect,
+          });
+          newFromCloud++;
+        }
+      }
+      if (newFromCloud > 0) {
+        configManager.save(config);
+      }
+    }
+  } else {
+    const stateFile = path.join(configManager.stateDir, 'state.json');
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  }
+
+  // Save hash cache after successful push
+  hashCacheManager.save(cache);
+
+  return {
+    configs: capturedConfigs.length,
+    repos: capturedRepos.length,
+    envFiles: capturedEnvFiles.length,
+    projects: capturedProjects.length,
+    groups: capturedGroups.length,
+    modules: capturedModules.length,
+  };
+}
+
+// --- Command registration ---
 
 export function registerPushCommand(program: Command): void {
   program
@@ -24,8 +477,11 @@ export function registerPushCommand(program: Command): void {
     .option('-m, --message <msg>', 'message describing this snapshot')
     .option('-y, --yes', 'skip confirmation prompt')
     .option('--no-delete', 'push local additions without removing cloud-only environments')
+    .option('--no-cache', 'skip hash cache and re-encrypt all files')
+    .option('--filter <filters...>', 'only push specific items (e.g. modules:ssh,configs)')
+    .option('--changed', 'only push items changed since last push')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
-    .action(async (options: { message?: string; yes?: boolean; noDelete?: boolean; iKnowWhatImDoing?: boolean }) => {
+    .action(async (options: PushOptions) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
@@ -53,341 +509,15 @@ export function registerPushCommand(program: Command): void {
       const spinner = ora('Pushing state...').start();
 
       try {
-        // Capture config files
-        const capturedConfigs: Record<string, any>[] = [];
-        for (const item of config.configs) {
-          const resolvedPath = resolveHome(item.source);
-          if (!fs.existsSync(resolvedPath)) continue;
-          if (!fs.statSync(resolvedPath).isFile()) continue;
-
-          let content: Buffer = Buffer.from(fs.readFileSync(resolvedPath));
-          content = Buffer.from(cryptoManager.encrypt(content));
-
-          capturedConfigs.push({
-            source: item.source,
-            content: content.toString('base64'),
-            encrypted: true,
-          });
-        }
-
-        // Capture repo metadata (URL, branch, path — not the actual files)
-        const capturedRepos: Record<string, any>[] = [];
-        for (const repo of config.repos) {
-          const repoPath = resolveHome(repo.path);
-          const repoState: Record<string, any> = {
-            url: repo.url,
-            path: repo.path,
-            branch: repo.branch || 'main',
-            auto_pull: repo.auto_pull !== false,
-          };
-
-          // If the repo exists locally, capture current branch and commit
-          if (fs.existsSync(path.join(repoPath, '.git'))) {
-            try {
-              repoState.current_branch = execSync('git branch --show-current', {
-                cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-              }).trim();
-              repoState.commit = execSync('git rev-parse HEAD', {
-                cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-              }).trim();
-              const status = execSync('git status --porcelain', {
-                cwd: repoPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-              });
-              repoState.has_uncommitted = status.trim().length > 0;
-            } catch {
-              // Git commands failed, just save the config
-            }
-          }
-
-          capturedRepos.push(repoState);
-        }
-
-        // Capture env files (always encrypted)
-        const capturedEnvFiles: Record<string, any>[] = [];
-        for (const env of config.env_files) {
-          const envPath = path.join(resolveHome(env.project_path), env.filename || '.env.local');
-          if (!fs.existsSync(envPath)) continue;
-
-          let content: Buffer = Buffer.from(fs.readFileSync(envPath));
-          content = Buffer.from(cryptoManager.encrypt(content));
-
-          capturedEnvFiles.push({
-            project_path: env.project_path,
-            filename: env.filename || '.env.local',
-            content: content.toString('base64'),
-            encrypted: true,
-          });
-        }
-
-        // Capture projects
-        const capturedProjects: Record<string, any>[] = [];
-        for (const project of config.projects || []) {
-          const projectPath = resolveHome(project.path);
-          const capturedProject: Record<string, any> = {
-            name: project.name,
-            path: project.path,
-            repo: project.repo || null,
-            secrets: [],
-            configs: [],
-          };
-
-          // Capture project secrets (encrypted)
-          for (const secretName of project.secrets) {
-            const secretPath = path.join(projectPath, secretName);
-            if (!fs.existsSync(secretPath)) continue;
-            let content: Buffer = Buffer.from(fs.readFileSync(secretPath));
-            content = Buffer.from(cryptoManager.encrypt(content));
-            capturedProject.secrets.push({
-              filename: secretName,
-              content: content.toString('base64'),
-              encrypted: true,
-            });
-          }
-
-          // Capture project configs (all encrypted)
-          for (const configName of project.configs) {
-            const configPath = path.join(projectPath, configName);
-            if (!fs.existsSync(configPath)) continue;
-            let content: Buffer = Buffer.from(fs.readFileSync(configPath));
-            content = Buffer.from(cryptoManager.encrypt(content));
-            capturedProject.configs.push({
-              filename: configName,
-              content: content.toString('base64'),
-              encrypted: true,
-            });
-          }
-
-          // Capture repo state if exists
-          if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
-            try {
-              capturedProject.repo.current_branch = execSync('git branch --show-current', {
-                cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-              }).trim();
-              capturedProject.repo.commit = execSync('git rev-parse HEAD', {
-                cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-              }).trim();
-            } catch {}
-          }
-
-          capturedProjects.push(capturedProject);
-        }
-
-        // Capture groups (each group contains multiple projects)
-        const capturedGroups: Record<string, any>[] = [];
-        for (const group of config.groups || []) {
-          const capturedGroup: Record<string, any> = {
-            name: group.name,
-            path: group.path,
-            projects: [],
-          };
-
-          for (const project of group.projects) {
-            const projectPath = resolveHome(project.path);
-            const cp: Record<string, any> = {
-              name: project.name,
-              path: project.path,
-              repo: project.repo || null,
-              secrets: [],
-              configs: [],
-            };
-
-            for (const secretName of project.secrets) {
-              const secretPath = path.join(projectPath, secretName);
-              if (!fs.existsSync(secretPath)) continue;
-              let content: Buffer = Buffer.from(fs.readFileSync(secretPath));
-              content = Buffer.from(cryptoManager.encrypt(content));
-              cp.secrets.push({ filename: secretName, content: content.toString('base64'), encrypted: true });
-            }
-
-            for (const configName of project.configs) {
-              const configPath = path.join(projectPath, configName);
-              if (!fs.existsSync(configPath)) continue;
-              cp.configs.push({ filename: configName, content: Buffer.from(cryptoManager.encrypt(Buffer.from(fs.readFileSync(configPath)))).toString('base64'), encrypted: true });
-            }
-
-            if (project.repo && fs.existsSync(path.join(projectPath, '.git'))) {
-              try {
-                cp.repo.current_branch = execSync('git branch --show-current', { cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-                cp.repo.commit = execSync('git rev-parse HEAD', { cwd: projectPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-              } catch {}
-            }
-
-            capturedGroup.projects.push(cp);
-          }
-
-          capturedGroups.push(capturedGroup);
-        }
-
-        // Capture modules
-        const capturedModules: Record<string, any>[] = [];
-        for (const mod of config.modules || []) {
-          const capturedMod: Record<string, any> = {
-            name: mod.name,
-            files: [],
-            extras: mod.extras || null,
-          };
-
-          for (const file of mod.files) {
-            const filePath = file.path.replace(/^~/, os.homedir());
-            const resolvedPath = path.resolve(filePath);
-            if (!fs.existsSync(resolvedPath)) continue;
-            if (!fs.statSync(resolvedPath).isFile()) continue;
-
-            let content: Buffer = Buffer.from(fs.readFileSync(resolvedPath));
-            content = Buffer.from(cryptoManager.encrypt(content));
-
-            capturedMod.files.push({
-              path: file.path,
-              content: content.toString('base64'),
-              encrypted: true,
-            });
-          }
-
-          capturedModules.push(capturedMod);
-        }
-
-        // Capture tracked env vars
-        const capturedEnvVars: Record<string, string> = {};
-        for (const varName of config.env_vars || []) {
-          const value = process.env[varName];
-          if (value !== undefined) {
-            capturedEnvVars[varName] = value;
-          }
-        }
-
-        // Environment-scoped secrets
-        const activeEnvName = activeEnv?.name || envManager.resolve(program.opts().env);
-        const envFilesByEnvironment: Record<string, any[]> = {};
-        if (activeEnvName) {
-          envFilesByEnvironment[activeEnvName] = capturedEnvFiles;
-        }
-
-        const state: Record<string, any> = {
-          timestamp: new Date().toISOString(),
-          message: options.message || '',
-          active_environment: activeEnvName || null,
-          configs: capturedConfigs,
-          repos: capturedRepos,
-          env_files: activeEnvName ? [] : capturedEnvFiles,
-          env_files_by_environment: envFilesByEnvironment,
-          packages: config.packages || [],
-          projects: capturedProjects,
-          groups: capturedGroups,
-          modules: capturedModules,
-          env_vars: capturedEnvVars,
-          machine_vars: config.machine || null,
-          profiles: config.profiles || [],
-        };
-
-        const metadata = {
-          timestamp: state.timestamp,
-          configs: capturedConfigs.map((c: any) => ({ source: c.source, encrypted: !!c.encrypted })),
-          repos: capturedRepos.map((r: any) => ({ url: r.url, path: r.path, branch: r.branch || r.current_branch })),
-          env_files: capturedEnvFiles.map((e: any) => ({ project_path: e.project_path, filename: e.filename })),
-          packages: (config.packages || []).map((p: any) => ({
-            manager: p.manager,
-            displayName: p.displayName,
-            count: p.packages.length,
-            items: p.packages,
-          })),
-          projects: (config.projects || []).map((p: any) => ({
-            name: p.name,
-            path: p.path,
-            repo: p.repo || null,
-            secrets: p.secrets,
-            configs: p.configs,
-          })),
-          groups: (config.groups || []).map((g: any) => ({
-            name: g.name,
-            path: g.path,
-            projects: g.projects.map((p: any) => ({
-              name: p.name,
-              path: p.path,
-              repo: p.repo || null,
-              secrets: p.secrets,
-              configs: p.configs,
-            })),
-          })),
-          modules: (config.modules || []).map((m: any) => ({
-            name: m.name,
-            files: m.files.map((f: any) => ({ path: f.path, encrypt: f.encrypt })),
-            extras: m.extras || null,
-          })),
-          environments: (config.environments || []).map((e: any) => ({
-            name: e.name,
-            tier: e.tier,
-            label: e.label || null,
-            color: e.color || null,
-            api_url: e.api_url || null,
-            protect: !!e.protect,
-          })),
-          env_vars: Object.keys(capturedEnvVars),
-          machine_vars: config.machine || null,
-          active_environment: activeEnvName || null,
-          profiles: (config.profiles || []).map((p: any) => ({
-            name: p.name,
-            environment: p.environment || null,
-            paths: p.paths || [],
-            vars: p.vars || {},
-            env_overrides: p.env_overrides ? Object.keys(p.env_overrides).reduce((acc: Record<string, string>, k: string) => { acc[k] = '***'; return acc; }, {}) : {},
-            description: p.description || null,
-          })),
-        };
-
-        if (config.sync.backend === 'cloud') {
-          const apiUrl = config.sync.config.api_url;
-          const apiKey = config.sync.config.api_key;
-
-          if (!apiUrl || !apiKey) {
-            spinner.fail('Cloud backend not configured. Run "configsync login" first.');
-            process.exit(1);
-          }
-
-          const backend = new CloudBackend(apiUrl, apiKey);
-          await backend.registerMachine();
-          await backend.push(state, cryptoManager, metadata);
-
-          // Sync environments: push local → cloud, merge cloud-only back to local
-          if (config.environments && config.environments.length > 0) {
-            const merged = await backend.syncEnvironments(
-              config.environments.map(e => ({
-                name: e.name,
-                tier: e.tier,
-                color: e.color || null,
-                protect: !!e.protect,
-              })),
-              { deleteCloudOnly: !options.noDelete },
-            );
-            // Merge cloud-only environments back into local config
-            const localNames = new Set((config.environments || []).map(e => e.name));
-            let newFromCloud = 0;
-            for (const cloudEnv of merged) {
-              if (!localNames.has(cloudEnv.name)) {
-                config.environments.push({
-                  name: cloudEnv.name,
-                  tier: cloudEnv.tier,
-                  color: cloudEnv.color,
-                  protect: !!cloudEnv.protect,
-                });
-                newFromCloud++;
-              }
-            }
-            if (newFromCloud > 0) {
-              configManager.save(config);
-            }
-          }
-        } else {
-          const stateFile = path.join(configManager.stateDir, 'state.json');
-          fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-        }
+        const stats = await performPush(config, configManager, cryptoManager, envManager, program, options, spinner);
 
         const parts = [
-          `${capturedConfigs.length} config${capturedConfigs.length !== 1 ? 's' : ''}`,
-          `${capturedRepos.length} repo${capturedRepos.length !== 1 ? 's' : ''}`,
-          `${capturedEnvFiles.length} env file${capturedEnvFiles.length !== 1 ? 's' : ''}`,
-          `${capturedProjects.length} project${capturedProjects.length !== 1 ? 's' : ''}`,
-          `${capturedGroups.length} group${capturedGroups.length !== 1 ? 's' : ''}`,
-          `${capturedModules.length} module${capturedModules.length !== 1 ? 's' : ''}`,
+          `${stats.configs} config${stats.configs !== 1 ? 's' : ''}`,
+          `${stats.repos} repo${stats.repos !== 1 ? 's' : ''}`,
+          `${stats.envFiles} env file${stats.envFiles !== 1 ? 's' : ''}`,
+          `${stats.projects} project${stats.projects !== 1 ? 's' : ''}`,
+          `${stats.groups} group${stats.groups !== 1 ? 's' : ''}`,
+          `${stats.modules} module${stats.modules !== 1 ? 's' : ''}`,
         ].filter(p => !p.startsWith('0'));
 
         spinner.succeed(`State pushed! (${parts.join(', ')})`);

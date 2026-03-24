@@ -16,6 +16,8 @@ import { registerSyncCommand } from './sync.js';
 import { registerMachineCommand } from './machine.js';
 import { registerEnvCommand } from './env.js';
 import { registerProfileCommand } from './profile.js';
+import { registerHistoryCommand } from './history.js';
+import { registerWatchCommand } from './watch.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -35,4 +37,6 @@ export function registerCommands(program: Command): void {
   registerMachineCommand(program);
   registerEnvCommand(program);
   registerProfileCommand(program);
+  registerHistoryCommand(program);
+  registerWatchCommand(program);
 }
