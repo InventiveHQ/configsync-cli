@@ -141,6 +141,29 @@ class CloudBackend {
     return data.environments || [];
   }
 
+  async getHistory(machineId?: string, limit = 20): Promise<any[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (machineId) params.set('machine_id', machineId);
+    const response = await this.request('GET', `/api/machines/history?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to get history: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json() as any;
+    return data.snapshots || [];
+  }
+
+  async pullSnapshot(snapshotId: number, cryptoManager: any): Promise<Record<string, any> | null> {
+    const response = await this.request('GET', `/api/machines/snapshot/${snapshotId}`);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to get snapshot: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json() as any;
+    const encryptedBuffer = Buffer.from(data.encrypted_state, 'base64');
+    const decrypted = cryptoManager.decrypt(encryptedBuffer);
+    return JSON.parse(decrypted.toString());
+  }
+
   async syncEnvironments(
     environments: any[],
     options?: { deleteCloudOnly?: boolean },

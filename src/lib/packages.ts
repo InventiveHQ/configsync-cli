@@ -1,8 +1,11 @@
 /**
  * Package manager detection and scanning.
  */
-import { execSync } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import os from 'node:os';
+
+const execFileAsync = promisify(execFile);
 
 export interface PackageManager {
   name: string;
@@ -207,6 +210,34 @@ export function scanPackages(): PackageManager[] {
   }
 
   return results;
+}
+
+/**
+ * Async version of scanPackages — runs all available managers in parallel.
+ */
+export async function scanPackagesAsync(): Promise<PackageManager[]> {
+  const available = managers.filter(m => cmdExists(m.checkCmd));
+
+  const results = await Promise.allSettled(
+    available.map(async (mgr): Promise<PackageManager | null> => {
+      try {
+        const { stdout } = await execFileAsync('sh', ['-c', mgr.listCmd], {
+          timeout: 30000,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        const packages = mgr.parseOutput(stdout);
+        if (packages.length === 0) return null;
+        return { name: mgr.name, displayName: mgr.displayName, available: true, packages };
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return results
+    .filter((r): r is PromiseFulfilledResult<PackageManager | null> => r.status === 'fulfilled')
+    .map(r => r.value)
+    .filter((r): r is PackageManager => r !== null);
 }
 
 export function formatPackageSummary(managers: PackageManager[]): string {
