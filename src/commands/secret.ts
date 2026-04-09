@@ -25,7 +25,16 @@ function saveSecrets(secretsFile: string, secrets: SecretsStore): void {
 export function registerSecretCommand(program: Command): void {
   const secretCmd = program
     .command('secret')
-    .description('Manage secrets');
+    .description('Manage secrets (DEPRECATED — use `configsync vars` instead)');
+
+  // v2: print deprecation warning to stderr before any secret subcommand runs.
+  secretCmd.hook('preAction', () => {
+    process.stderr.write(
+      '\x1b[33mwarning:\x1b[0m `configsync secret` is deprecated. ' +
+        'Use `configsync vars set/list/unset --project <slug> --env <tier>` instead. ' +
+        'The `secret` command will be removed in v2.x.\n',
+    );
+  });
 
   secretCmd
     .command('set <key>')

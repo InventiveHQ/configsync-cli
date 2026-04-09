@@ -7,6 +7,24 @@ import { ConfigManager, ProfileDef } from '../lib/config.js';
 import { ProfileManager } from '../lib/profiles.js';
 import { EnvironmentManager, isValidEnvName } from '../lib/environment.js';
 import { renderBanner } from '../lib/banner.js';
+// v2 imports
+import { CloudV2 } from '../lib/cloud-v2.js';
+import { SessionManager } from '../lib/session.js';
+import { promptPassword } from '../lib/prompt.js';
+import {
+  generateDEK,
+  wrapDEK,
+  unwrapDEK,
+  UserKeypair,
+} from '../lib/envelope-crypto.js';
+import {
+  EntityBlob,
+  blobToBytes,
+  bytesToBlob,
+  decryptEntityBlob,
+  encryptEntityBlob,
+  hashBlob,
+} from '../lib/entity-blob.js';
 
 function ask(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -477,5 +495,305 @@ export function registerProfileCommand(program: Command): void {
       configManager.save(config);
 
       console.log(chalk.green(`Removed env override "${key}" from profile "${name}".`));
+    });
+
+  // -------------------------------------------------------------------
+  // v2 cloud profile commands (added alongside the legacy overlay ones)
+  // -------------------------------------------------------------------
+  registerV2ProfileCommands(profile);
+}
+
+// ---------------------------------------------------------------------------
+// v2 profile entity commands
+// ---------------------------------------------------------------------------
+
+async function loadCloudV2(): Promise<{
+  cloud: CloudV2;
+  sessionMgr: SessionManager;
+  userId: number;
+}> {
+  const configManager = new ConfigManager();
+  if (!configManager.exists()) {
+    console.error(chalk.red("Run 'configsync login' first."));
+    process.exit(1);
+  }
+  const sessionMgr = new SessionManager(configManager.configDir);
+  if (!sessionMgr.exists()) {
+    console.error(chalk.red("No v2 session. Run 'configsync login' first."));
+    process.exit(1);
+  }
+  const s = sessionMgr.load();
+  const config = configManager.load();
+  const apiUrl = (config.sync?.config?.api_url as string) ?? s.api_url;
+  const apiKey = (config.sync?.config?.api_key as string) ?? '';
+  if (!apiKey) {
+    console.error(chalk.red('No API key. Run `configsync login`.'));
+    process.exit(3);
+  }
+  return {
+    cloud: new CloudV2(apiUrl, apiKey, s.machine_id),
+    sessionMgr,
+    userId: s.user_id,
+  };
+}
+
+async function unlock(sessionMgr: SessionManager): Promise<UserKeypair> {
+  const password = await promptPassword('Enter master password: ');
+  try {
+    return sessionMgr.unlockKeypair(password);
+  } catch {
+    console.error(chalk.red('Incorrect master password.'));
+    process.exit(3);
+  }
+}
+
+function emptyProfileBlob(slug: string): EntityBlob {
+  return {
+    schema_version: 1,
+    entity_type: 'profile',
+    slug,
+    captured_at: new Date().toISOString(),
+    files: [],
+    extras: { packages: [] as string[] },
+  };
+}
+
+async function fetchProfileBlobOrEmpty(
+  cloud: CloudV2,
+  profile: any,
+  keypair: UserKeypair,
+  userId: number,
+): Promise<{ blob: EntityBlob; dek: Buffer }> {
+  // Obtain DEK: fetch profile (which returns wrapped_dek alongside).
+  const detail = await cloud.getProfile(profile.id);
+  let dek: Buffer;
+  if (detail.wrapped_dek) {
+    dek = unwrapDEK(Buffer.from(detail.wrapped_dek, 'base64'), keypair);
+  } else {
+    dek = generateDEK();
+    const wrapped = wrapDEK(dek, keypair.publicKey);
+    await cloud.upsertProfileKey(profile.id, wrapped.toString('base64'), userId);
+  }
+
+  if (!profile.current_version || profile.current_version < 1) {
+    return { blob: emptyProfileBlob(profile.slug), dek };
+  }
+  const ciphertext = await cloud.getProfileBlob(profile.id);
+  const plaintext = decryptEntityBlob(
+    ciphertext,
+    dek,
+    'profile',
+    profile.id,
+    profile.current_version,
+  );
+  return { blob: bytesToBlob(plaintext), dek };
+}
+
+async function pushProfileBlob(
+  cloud: CloudV2,
+  profile: any,
+  blob: EntityBlob,
+  dek: Buffer,
+): Promise<number> {
+  const bytes = blobToBytes(blob);
+  const nextVersion = (profile.current_version ?? 0) + 1;
+  const ct = encryptEntityBlob(bytes, dek, 'profile', profile.id, nextVersion);
+  const result = await cloud.pushProfileVersion(profile.id, ct.toString('base64'), hashBlob(bytes));
+  return result.version ?? nextVersion;
+}
+
+function registerV2ProfileCommands(profile: Command): void {
+  profile
+    .command('add <slug>')
+    .description('v2: create a new cloud profile entity')
+    .option('--name <name>', 'display name (default: slug)')
+    .option('--description <text>', 'description')
+    .option('--default', 'mark as the default profile')
+    .action(async (slug: string, opts: any) => {
+      const { cloud } = await loadCloudV2();
+      try {
+        const p = await cloud.createProfile({
+          slug,
+          name: opts.name ?? slug,
+          description: opts.description,
+          is_default: !!opts.default,
+        });
+        console.log(chalk.green(`Created profile ${p?.slug ?? slug}`));
+      } catch (err: any) {
+        console.error(chalk.red(`Create failed: ${err.message ?? err}`));
+        process.exit(1);
+      }
+    });
+
+  profile
+    .command('rename <oldSlug> <newName>')
+    .description('v2: rename a cloud profile')
+    .action(async (oldSlug: string, newName: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === oldSlug);
+      if (!p) {
+        console.error(chalk.red(`Profile '${oldSlug}' not found.`));
+        process.exit(1);
+      }
+      await cloud.patchProfile(p.id, { name: newName });
+      console.log(chalk.green(`Renamed profile ${oldSlug} -> ${newName}`));
+    });
+
+  profile
+    .command('cloud-delete <slug>')
+    .description('v2: soft-delete a cloud profile')
+    .action(async (slug: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === slug);
+      if (!p) {
+        console.error(chalk.red(`Profile '${slug}' not found.`));
+        process.exit(1);
+      }
+      await cloud.deleteProfile(p.id);
+      console.log(chalk.green(`Deleted profile ${slug}`));
+    });
+
+  profile
+    .command('cloud-list')
+    .description('v2: list cloud profiles')
+    .action(async () => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      if (profiles.length === 0) {
+        console.log(chalk.dim('No cloud profiles.'));
+        return;
+      }
+      for (const p of profiles) {
+        console.log(
+          `${chalk.cyan((p.slug ?? '').padEnd(20))} ${p.name ?? ''}  v${p.current_version ?? 0}`,
+        );
+      }
+    });
+
+  profile
+    .command('cloud-show <slug>')
+    .description('v2: show a cloud profile')
+    .action(async (slug: string) => {
+      const { cloud, sessionMgr, userId } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === slug);
+      if (!p) {
+        console.error(chalk.red(`Profile '${slug}' not found.`));
+        process.exit(1);
+      }
+      try {
+        const keypair = await unlock(sessionMgr);
+        const { blob } = await fetchProfileBlobOrEmpty(cloud, p, keypair, userId);
+        console.log(chalk.bold(`Profile ${p.slug}:`));
+        console.log(JSON.stringify(blob, null, 2));
+      } catch (err: any) {
+        console.error(chalk.red(`Show failed: ${err.message ?? err}`));
+        process.exit(1);
+      }
+    });
+
+  profile
+    .command('add-workspace <profileSlug> <workspaceSlug>')
+    .description('v2: attach a workspace to a cloud profile')
+    .action(async (profileSlug: string, workspaceSlug: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === profileSlug);
+      if (!p) {
+        console.error(chalk.red(`Profile '${profileSlug}' not found.`));
+        process.exit(1);
+      }
+      const workspaces = await cloud.listWorkspaces();
+      const w = workspaces.find((x: any) => x.slug === workspaceSlug);
+      if (!w) {
+        console.error(chalk.red(`Workspace '${workspaceSlug}' not found.`));
+        process.exit(1);
+      }
+      await cloud.addProfileWorkspace(p.id, w.id);
+      console.log(chalk.green(`Linked workspace ${w.slug} -> profile ${p.slug}`));
+    });
+
+  profile
+    .command('remove-workspace <profileSlug> <workspaceSlug>')
+    .description('v2: detach a workspace from a cloud profile')
+    .action(async (profileSlug: string, workspaceSlug: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === profileSlug);
+      if (!p) { console.error(chalk.red(`Profile '${profileSlug}' not found.`)); process.exit(1); }
+      const workspaces = await cloud.listWorkspaces();
+      const w = workspaces.find((x: any) => x.slug === workspaceSlug);
+      if (!w) { console.error(chalk.red(`Workspace '${workspaceSlug}' not found.`)); process.exit(1); }
+      await cloud.removeProfileWorkspace(p.id, w.id);
+      console.log(chalk.green(`Unlinked workspace ${w.slug} from profile ${p.slug}`));
+    });
+
+  profile
+    .command('add-package <profileSlug> <package>')
+    .description('v2: add a package to a cloud profile')
+    .action(async (profileSlug: string, pkg: string) => {
+      const { cloud, sessionMgr, userId } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === profileSlug);
+      if (!p) { console.error(chalk.red(`Profile '${profileSlug}' not found.`)); process.exit(1); }
+      const keypair = await unlock(sessionMgr);
+      const { blob, dek } = await fetchProfileBlobOrEmpty(cloud, p, keypair, userId);
+      const packages = ((blob.extras?.packages as string[] | undefined) ?? []) as string[];
+      if (packages.includes(pkg)) {
+        console.log(chalk.dim(`${pkg} already in profile ${p.slug}`));
+        return;
+      }
+      packages.push(pkg);
+      blob.extras = { ...(blob.extras ?? {}), packages };
+      const version = await pushProfileBlob(cloud, p, blob, dek);
+      console.log(chalk.green(`Added ${pkg} to profile ${p.slug} (v${version})`));
+    });
+
+  profile
+    .command('remove-package <profileSlug> <package>')
+    .description('v2: remove a package from a cloud profile')
+    .action(async (profileSlug: string, pkg: string) => {
+      const { cloud, sessionMgr, userId } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === profileSlug);
+      if (!p) { console.error(chalk.red(`Profile '${profileSlug}' not found.`)); process.exit(1); }
+      const keypair = await unlock(sessionMgr);
+      const { blob, dek } = await fetchProfileBlobOrEmpty(cloud, p, keypair, userId);
+      const packages = ((blob.extras?.packages as string[] | undefined) ?? []) as string[];
+      const idx = packages.indexOf(pkg);
+      if (idx === -1) {
+        console.log(chalk.dim(`${pkg} not in profile ${p.slug}`));
+        return;
+      }
+      packages.splice(idx, 1);
+      blob.extras = { ...(blob.extras ?? {}), packages };
+      const version = await pushProfileBlob(cloud, p, blob, dek);
+      console.log(chalk.green(`Removed ${pkg} from profile ${p.slug} (v${version})`));
+    });
+
+  profile
+    .command('activate <slug>')
+    .description('v2: activate a cloud profile on this machine')
+    .action(async (slug: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === slug);
+      if (!p) { console.error(chalk.red(`Profile '${slug}' not found.`)); process.exit(1); }
+      await cloud.setMachineProfileActive(cloud.machineId, p.id, true);
+      console.log(chalk.green(`Activated profile ${slug}`));
+    });
+
+  profile
+    .command('deactivate <slug>')
+    .description('v2: deactivate a cloud profile on this machine')
+    .action(async (slug: string) => {
+      const { cloud } = await loadCloudV2();
+      const profiles = await cloud.listProfiles();
+      const p = profiles.find((x: any) => x.slug === slug);
+      if (!p) { console.error(chalk.red(`Profile '${slug}' not found.`)); process.exit(1); }
+      await cloud.setMachineProfileActive(cloud.machineId, p.id, false);
+      console.log(chalk.green(`Deactivated profile ${slug}`));
     });
 }

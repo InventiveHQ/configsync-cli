@@ -127,8 +127,12 @@ export function registerAddCommand(program: Command): void {
   // configsync add group <folder> — scan all subfolders as projects
   addCmd
     .command('group <folder>')
-    .description('Add a folder of projects (each subfolder with a git repo becomes a project)')
+    .description('DEPRECATED alias for `add workspace`. Use `add workspace` instead.')
     .action(async (folder: string) => {
+      process.stderr.write(
+        '\x1b[33mwarning:\x1b[0m `configsync add group` is deprecated. ' +
+          'Use `configsync add workspace` instead.\n',
+      );
       const configManager = new ConfigManager();
       ensureInit(configManager);
       const config = configManager.load();

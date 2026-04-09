@@ -8,7 +8,13 @@ import os from 'node:os';
 import chalk from 'chalk';
 import type { Config } from './config.js';
 
-export type HookName = 'pre_push' | 'post_push' | 'pre_pull' | 'post_pull';
+export type HookName =
+  | 'pre_push'
+  | 'post_push'
+  | 'pre_pull'
+  | 'post_pull'
+  | 'pre_sync'
+  | 'post_sync';
 
 export interface HookOptions {
   continueOnError?: boolean;
