@@ -374,8 +374,8 @@ const RESTORE_FNS: Record<string, (ctx: RestoreContext) => void> = {
 
 export function registerPullCommand(program: Command): void {
   program
-    .command('pull')
-    .description('Pull and restore entities from sync backend (use --project <slug> or --workspace <slug>)')
+    .command('pull [type] [slug]')
+    .description('Pull and restore entities (e.g. pull workspace <slug> or pull project <slug>)')
     .option('--force', 'overwrite existing files without backup', false)
     .option('--from <machine>', 'pull from a specific machine (name or ID)')
     .option('--group <name>', 'only pull a specific project group')
@@ -395,7 +395,7 @@ export function registerPullCommand(program: Command): void {
     .option('--rerun-bootstrap', 'force re-run bootstrap even if already done')
     .option('--path <dir>', 'v2: target directory for --project pull')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
-    .action(async (options: {
+    .action(async (typeArg: string | undefined, slugArg: string | undefined, options: {
       force: boolean;
       from?: string;
       group?: string;
@@ -418,6 +418,20 @@ export function registerPullCommand(program: Command): void {
     }) => {
       const configManager = new ConfigManager();
 
+      // Normalize v2 entity pull (positional vs flag)
+      let projectSlug = options.project;
+      let workspaceSlug = options.workspace;
+
+      if (typeArg === 'project' && slugArg) {
+        projectSlug = slugArg;
+      } else if (typeArg === 'workspace' && slugArg) {
+        workspaceSlug = slugArg;
+      } else if (typeArg && !slugArg) {
+        // Handle `pull <slug>` case by checking if it matches an option
+        // or just treating it as a project by default? 
+        // For now, let's stick to explicit `pull workspace <slug>`
+      }
+
       if (!configManager.exists()) {
         console.error(chalk.red("Error: Run 'configsync init' first."));
         process.exit(1);
@@ -426,24 +440,24 @@ export function registerPullCommand(program: Command): void {
       // v2: `--from <machine>` is removed.
       if (options.from) {
         console.error(chalk.red('Error: --from <machine> is removed in v2.'));
-        console.error(chalk.yellow('Use `configsync pull --project <slug>` instead.'));
+        console.error(chalk.yellow('Use `configsync pull project <slug>` instead.'));
         process.exit(2);
       }
 
       // v2: if a v2 session exists and --project or --workspace is supplied,
       // use the v2 entity-based pull flow. Fall back to legacy pull otherwise.
       const v2Session = new SessionManager(configManager.configDir);
-      if ((options.project || options.workspace) && v2Session.exists()) {
+      if ((projectSlug || workspaceSlug) && v2Session.exists()) {
         try {
-          if (options.workspace) {
+          if (workspaceSlug) {
             await pullWorkspaceV2({
               configManager,
-              workspaceSlug: options.workspace,
+              workspaceSlug,
             });
-          } else if (options.project) {
+          } else if (projectSlug) {
             await pullProjectV2({
               configManager,
-              projectSlug: options.project!,
+              projectSlug,
               targetPath: options.path,
             });
           }
