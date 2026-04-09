@@ -12,6 +12,13 @@ import { SessionManager } from '../lib/session.js';
 import CloudV2 from '../lib/cloud-v2.js';
 import { promptPassword } from '../lib/prompt.js';
 import { slugify } from '../lib/git-info.js';
+import { generateDEK, wrapDEK, type UserKeypair } from '../lib/envelope-crypto.js';
+import {
+  type EntityBlob,
+  blobToBytes,
+  encryptEntityBlob,
+  hashBlob,
+} from '../lib/entity-blob.js';
 
 export function registerAddCommand(program: Command): void {
   const addCmd = program
@@ -175,6 +182,15 @@ export function registerAddCommand(program: Command): void {
       const hadEnvPassword = process.env.CONFIGSYNC_MASTER_PASSWORD !== undefined;
       process.env.CONFIGSYNC_MASTER_PASSWORD = password;
 
+      // Unlock the keypair locally so we can wrap the workspace DEK ourselves.
+      let keypair: UserKeypair;
+      try {
+        keypair = sessionMgr.unlockKeypair(password);
+      } catch {
+        console.error(chalk.red('Incorrect master password.'));
+        process.exit(3);
+      }
+
       try {
         // Step 1: add each subfolder as a project
         const projectSlugs: string[] = [];
@@ -195,11 +211,12 @@ export function registerAddCommand(program: Command): void {
           process.exit(1);
         }
 
-        // Step 2: create the workspace entity
+        // Step 2: create the workspace entity (with DEK + initial empty blob)
         console.log(chalk.cyan(`\n→ Creating workspace '${workspaceSlug}'`));
         const apiUrl = configManager.load().sync.config.api_url as string;
         const apiKey = configManager.load().sync.config.api_key as string;
         const machineId = sessionMgr.load().machine_id;
+        const userId = sessionMgr.load().user_id;
         const cloud = new CloudV2(apiUrl, apiKey, machineId);
 
         const existing = await cloud.listWorkspaces();
@@ -209,6 +226,32 @@ export function registerAddCommand(program: Command): void {
         } else {
           const ws = await cloud.createWorkspace({ slug: workspaceSlug, name: workspaceName });
           console.log(chalk.green(`  Created workspace '${workspaceSlug}' (id=${ws.id})`));
+
+          // Generate a workspace DEK, wrap it with the user's pubkey, upload it.
+          const dek = generateDEK();
+          const wrapped = wrapDEK(dek, keypair.publicKey);
+          await cloud.upsertEntityKey('workspace', ws.id, wrapped.toString('base64'), userId);
+          console.log(chalk.dim('  Wrapped DEK uploaded'));
+
+          // Push an initial empty workspace blob (v1) so subsequent
+          // mutateWorkspaceProjectList calls have something to decrypt.
+          const blob: EntityBlob = {
+            schema_version: 1,
+            entity_type: 'workspace',
+            slug: ws.slug,
+            captured_at: new Date().toISOString(),
+            files: [],
+            extras: { project_ids: [] },
+          };
+          const bytes = blobToBytes(blob);
+          const ct = encryptEntityBlob(bytes, dek, 'workspace', ws.id, 1);
+          await cloud.pushEntityVersion(
+            'workspace',
+            ws.id,
+            ct.toString('base64'),
+            hashBlob(bytes),
+          );
+          console.log(chalk.dim('  Pushed v1 (empty)'));
         }
 
         // Step 3: link each project to the workspace via the encrypted blob
