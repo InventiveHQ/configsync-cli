@@ -20,6 +20,8 @@ import { registerHistoryCommand } from './history.js';
 import { registerWatchCommand } from './watch.js';
 import { registerDiffCommand } from './diff.js';
 import { registerSetupCommand } from './setup.js';
+import { registerProjectCommand } from './project.js';
+import { registerVarsCommand } from './vars.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -43,4 +45,6 @@ export function registerCommands(program: Command): void {
   registerWatchCommand(program);
   registerDiffCommand(program);
   registerSetupCommand(program);
+  registerProjectCommand(program);
+  registerVarsCommand(program);
 }

@@ -23,6 +23,8 @@ import { parseFilters, shouldInclude, isFilterActive, type Filter } from '../lib
 import { getRestoreLevels } from '../lib/dependency-graph.js';
 import { executeHooks } from '../lib/hooks.js';
 import { runBootstrapIfNeeded } from '../lib/bootstrap.js';
+import { SessionManager } from '../lib/session.js';
+import { pullProjectV2 } from '../lib/entity-sync.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
@@ -390,6 +392,7 @@ export function registerPullCommand(program: Command): void {
     .option('--snapshot <id>', 'restore a specific snapshot by ID')
     .option('--skip-bootstrap', 'skip bootstrap script execution')
     .option('--rerun-bootstrap', 'force re-run bootstrap even if already done')
+    .option('--path <dir>', 'v2: target directory for --project pull')
     .option('--i-know-what-im-doing', 'override production safety (requires CONFIGSYNC_ALLOW_PROD_SKIP=1)')
     .action(async (options: {
       force: boolean;
@@ -409,12 +412,37 @@ export function registerPullCommand(program: Command): void {
       skipBootstrap?: boolean;
       rerunBootstrap?: boolean;
       iKnowWhatImDoing?: boolean;
+      path?: string;
     }) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
         console.error(chalk.red("Error: Run 'configsync init' first."));
         process.exit(1);
+      }
+
+      // v2: `--from <machine>` is removed.
+      if (options.from) {
+        console.error(chalk.red('Error: --from <machine> is removed in v2.'));
+        console.error(chalk.yellow('Use `configsync pull --project <slug>` instead.'));
+        process.exit(2);
+      }
+
+      // v2: if a v2 session exists and --project is supplied, use the v2
+      // entity-based pull flow. Fall back to legacy pull otherwise.
+      const v2Session = new SessionManager(configManager.configDir);
+      if (options.project && v2Session.exists()) {
+        try {
+          await pullProjectV2({
+            configManager,
+            projectSlug: options.project,
+            targetPath: options.path,
+          });
+          process.exit(0);
+        } catch (err: any) {
+          console.error(chalk.red(`Pull failed: ${err.message ?? err}`));
+          process.exit(1);
+        }
       }
 
       const config = configManager.load();

@@ -5,6 +5,8 @@ import readline from 'node:readline';
 import { ConfigManager, EnvironmentDef } from '../lib/config.js';
 import CloudBackend from '../lib/cloud.js';
 import { getModule } from '../lib/modules.js';
+import { SessionManager } from '../lib/session.js';
+import { runSync as runV2Sync } from '../lib/entity-sync.js';
 
 async function confirm(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return true;
@@ -47,6 +49,11 @@ interface SyncOptions {
   noDeleteCloud?: boolean;
   cloudWins?: boolean;
   localWins?: boolean;
+  prompt?: boolean;
+  dryRun?: boolean;
+  entity?: string;
+  legacyOnly?: boolean;
+  skipContent?: boolean;
 }
 
 /**
@@ -116,13 +123,39 @@ export function registerSyncCommand(program: Command): void {
     .option('--no-delete-local', 'keep local environments even if deleted on cloud')
     .option('--no-delete-cloud', 'keep cloud environments even if deleted locally')
     .option('--cloud-wins', 'on conflict, prefer cloud version over local')
-    .option('--local-wins', 'on conflict, prefer local version (default)')
+    .option('--local-wins', 'on conflict, prefer local version')
+    .option('--prompt', 'prompt per-entity on conflict')
+    .option('--dry-run', 'report sync actions without applying them')
+    .option('--entity <type/slug>', 'scope sync to a single entity (e.g. project/alert24)')
+    .option('--legacy-only', 'only run legacy environment reconciler (skip v2 content sync)')
+    .option('--skip-content', 'skip v2 entity content sync, run legacy env reconciler only')
     .action(async (options: SyncOptions) => {
       const configManager = new ConfigManager();
 
       if (!configManager.exists()) {
         console.error(chalk.red("Error: Run 'configsync init' first."));
         process.exit(1);
+      }
+
+      // v2 content sync — run first if a v2 session is present and the
+      // caller hasn't asked to skip it.
+      const sessionMgr = new SessionManager(configManager.configDir);
+      if (sessionMgr.exists() && !options.legacyOnly && !options.skipContent) {
+        try {
+          const code = await runV2Sync(configManager, {
+            cloudWins: options.cloudWins,
+            localWins: options.localWins,
+            prompt: options.prompt,
+            dryRun: options.dryRun,
+            entity: options.entity,
+          });
+          if (code !== 0) {
+            process.exit(code);
+          }
+        } catch (err: any) {
+          console.error(chalk.red(`v2 content sync failed: ${err.message ?? err}`));
+          process.exit(1);
+        }
       }
 
       const config = configManager.load();

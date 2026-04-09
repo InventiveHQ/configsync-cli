@@ -118,6 +118,8 @@ export interface Config {
     post_push?: string[];
     pre_pull?: string[];
     post_pull?: string[];
+    pre_sync?: string[];
+    post_sync?: string[];
   };
   bootstrap?: {
     script?: string;      // path to bootstrap script (default: ~/.configsync/bootstrap.sh)
