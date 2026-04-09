@@ -10,6 +10,20 @@
 
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+
+// Read the CLI version from package.json so registerMachine can report
+// it back to the server. Falls back to a string literal if package.json
+// can't be resolved (e.g. during tests).
+const CLI_VERSION: string = (() => {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require('../../package.json') as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -202,7 +216,7 @@ export class CloudV2 {
       name: name ?? os.hostname(),
       platform: os.platform(),
       arch: os.arch(),
-      python_version: null,
+      cli_version: process.env.npm_package_version ?? CLI_VERSION,
     };
     const out = await this.request<{ machine: MachineRow }>('POST', '/api/machines/register', body);
     return out.machine;
