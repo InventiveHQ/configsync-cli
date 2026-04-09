@@ -231,7 +231,7 @@ async function fetchAndDecryptBlob(
   return bytesToBlob(bytes);
 }
 
-async function mutateWorkspaceProjectList(
+export async function mutateWorkspaceProjectList(
   workspaceSlug: string,
   projectSlug: string,
   op: 'add' | 'remove',

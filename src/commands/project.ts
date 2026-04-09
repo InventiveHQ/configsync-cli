@@ -156,7 +156,7 @@ async function loadCloud(): Promise<CloudV2> {
   return new CloudV2(apiUrl, apiKey, machineId);
 }
 
-async function addProject(
+export async function addProject(
   rootDir: string,
   options: { name?: string; gitUrl?: string; gitBranch?: string },
 ): Promise<ProjectRow> {

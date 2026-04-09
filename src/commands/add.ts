@@ -6,6 +6,12 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { ConfigManager, ProjectConfig, GroupConfig, ModuleConfig } from '../lib/config.js';
 import { listModules, getModule, getAvailableModuleNames } from '../lib/modules.js';
+import { addProject } from './project.js';
+import { mutateWorkspaceProjectList } from './workspace.js';
+import { SessionManager } from '../lib/session.js';
+import CloudV2 from '../lib/cloud-v2.js';
+import { promptPassword } from '../lib/prompt.js';
+import { slugify } from '../lib/git-info.js';
 
 export function registerAddCommand(program: Command): void {
   const addCmd = program
@@ -121,6 +127,105 @@ export function registerAddCommand(program: Command): void {
         console.log(chalk.green(`\nAdded project '${projectName}' with ${totalItems} item${totalItems !== 1 ? 's' : ''}`));
       } else {
         console.log(chalk.dim('\nNothing found to track in this folder.'));
+      }
+    });
+
+  // configsync add workspace <folder> — bulk-add a folder of git repos as a v2 workspace
+  addCmd
+    .command('workspace <folder>')
+    .description('Scan a folder for git repos, add each as a project, and group them into a v2 workspace')
+    .option('-n, --name <name>', 'workspace name (defaults to folder basename)')
+    .action(async (folder: string, options: { name?: string }) => {
+      const resolved = resolveHome(folder);
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+        console.error(chalk.red(`'${folder}' is not a directory.`));
+        process.exit(1);
+      }
+
+      const configManager = new ConfigManager();
+      const sessionMgr = new SessionManager(configManager.configDir);
+      if (!sessionMgr.exists()) {
+        console.error(chalk.red("No v2 session. Run 'configsync login' first."));
+        process.exit(1);
+      }
+
+      // Find subfolders that are git repos
+      const subdirs = fs
+        .readdirSync(resolved, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => path.join(resolved, d.name))
+        .filter((p) => fs.existsSync(path.join(p, '.git')));
+
+      if (subdirs.length === 0) {
+        console.error(chalk.red(`No git repos found in '${folder}'.`));
+        console.error(chalk.dim('Each subfolder must contain a .git directory.'));
+        process.exit(1);
+      }
+
+      const workspaceName = options.name ?? path.basename(resolved);
+      const workspaceSlug = slugify(workspaceName);
+
+      console.log(chalk.bold(`Workspace: ${workspaceName}`));
+      console.log(chalk.dim(`Found ${subdirs.length} git repo${subdirs.length !== 1 ? 's' : ''}`));
+      console.log();
+
+      // Prompt for password ONCE; subsequent addProject calls reuse it via env var.
+      // (passwordFromEnv() in prompt.ts honors CONFIGSYNC_MASTER_PASSWORD.)
+      const password = await promptPassword('Enter master password: ');
+      const hadEnvPassword = process.env.CONFIGSYNC_MASTER_PASSWORD !== undefined;
+      process.env.CONFIGSYNC_MASTER_PASSWORD = password;
+
+      try {
+        // Step 1: add each subfolder as a project
+        const projectSlugs: string[] = [];
+        const projectIds: number[] = [];
+        for (const subdir of subdirs) {
+          console.log(chalk.cyan(`\n→ ${path.basename(subdir)}`));
+          try {
+            const project = await addProject(subdir, {});
+            projectSlugs.push(project.slug);
+            projectIds.push(project.id);
+          } catch (err: any) {
+            console.error(chalk.red(`  Failed: ${err.message}`));
+          }
+        }
+
+        if (projectIds.length === 0) {
+          console.error(chalk.red('\nNo projects were added; not creating workspace.'));
+          process.exit(1);
+        }
+
+        // Step 2: create the workspace entity
+        console.log(chalk.cyan(`\n→ Creating workspace '${workspaceSlug}'`));
+        const apiUrl = configManager.load().sync.config.api_url as string;
+        const apiKey = configManager.load().sync.config.api_key as string;
+        const machineId = sessionMgr.load().machine_id;
+        const cloud = new CloudV2(apiUrl, apiKey, machineId);
+
+        const existing = await cloud.listWorkspaces();
+        const match = existing.find((w: any) => w.slug === workspaceSlug);
+        if (match) {
+          console.log(chalk.dim(`  Reusing existing workspace '${workspaceSlug}'`));
+        } else {
+          const ws = await cloud.createWorkspace({ slug: workspaceSlug, name: workspaceName });
+          console.log(chalk.green(`  Created workspace '${workspaceSlug}' (id=${ws.id})`));
+        }
+
+        // Step 3: link each project to the workspace via the encrypted blob
+        console.log(chalk.cyan(`\n→ Linking ${projectSlugs.length} projects to workspace`));
+        for (const slug of projectSlugs) {
+          try {
+            await mutateWorkspaceProjectList(workspaceSlug, slug, 'add');
+            console.log(chalk.dim(`  ${slug}`));
+          } catch (err: any) {
+            console.log(chalk.dim(`  ${slug} (skipped: ${err.message})`));
+          }
+        }
+
+        console.log(chalk.green.bold(`\n✓ Workspace '${workspaceSlug}' ready with ${projectIds.length} projects`));
+        console.log(chalk.dim(`\nOn another machine: configsync pull --workspace ${workspaceSlug}`));
+      } finally {
+        if (!hadEnvPassword) delete process.env.CONFIGSYNC_MASTER_PASSWORD;
       }
     });
 
