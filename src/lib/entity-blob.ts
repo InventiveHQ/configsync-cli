@@ -179,7 +179,18 @@ export function decryptEntityBlob(
   entityId: number,
   version: number,
 ): Buffer {
-  return decryptBlob(ciphertext, dek, aadFor(entityType, entityId, version));
+  try {
+    return decryptBlob(ciphertext, dek, aadFor(entityType, entityId, version));
+  } catch (err: any) {
+    if (err.message?.includes('Unsupported state or unable to authenticate data')) {
+      throw new Error(
+        `Decryption failed for ${entityType} '${entityId}' v${version}. ` +
+        `This usually means the master password or entity DEK is incorrect for this machine. ` +
+        `(AAD: ${entityType}|${entityId}, Ciphertext length: ${ciphertext.length} bytes)`
+      );
+    }
+    throw err;
+  }
 }
 
 /** Apply a blob's file list to a target directory (used by pull). */
