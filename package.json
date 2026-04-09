@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node bin/configsync.js"
+    "start": "node bin/configsync.js",
+    "test": "vitest run"
   },
   "keywords": [
     "dotfiles",
@@ -24,13 +25,15 @@
     "commander": "^12.0.0",
     "diff": "^8.0.4",
     "js-yaml": "^4.1.0",
-    "ora": "^8.0.0"
+    "ora": "^8.0.0",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0"
   },
   "engines": {
     "node": ">=18.0.0"
