@@ -488,7 +488,19 @@ export function registerPullCommand(program: Command): void {
 
       const password = await promptPassword('Enter master password: ');
       const cryptoManager = new CryptoManager(configManager.configDir);
-      cryptoManager.unlock(password);
+      
+      // Legacy unlock: may fail on new machines that only have a v2 session.
+      // We wrap it so legacy pull can at least try to proceed or fail gracefully.
+      try {
+        cryptoManager.unlock(password);
+      } catch (err: any) {
+        if (!v2Session.exists()) {
+          console.error(chalk.red(`Error: ${err.message}`));
+          process.exit(1);
+        }
+        // If v2 session exists, we can ignore legacy unlock failure for now
+        // as the v2 flow already finished or didn't trigger.
+      }
 
       const spinner = ora('Pulling state...').start();
 
