@@ -184,14 +184,18 @@ export function decryptEntityBlob(
     return decryptBlob(ciphertext, dek, aad);
   } catch (err: any) {
     const msg = err.message ?? String(err);
-    throw new Error(
+    const detailedError = 
       `Decryption failed for ${entityType} (id=${entityId}, v${version})\n` +
       `  Error: ${msg}\n` +
       `  AAD: ${aad.toString('utf-8')}\n` +
       `  DEK size: ${dek.length} bytes\n` +
       `  Ciphertext size: ${ciphertext.length} bytes\n` +
-      `  This usually indicates a master password mismatch or a corrupted keypair on this machine.`
-    );
+      `  This usually indicates a master password mismatch or a corrupted keypair on this machine.`;
+    
+    // Log directly to stderr to bypass any possible catch-and-silence logic
+    process.stderr.write(`\n--- DECRYPTION ERROR ---\n${detailedError}\n-----------------------\n\n`);
+    
+    throw new Error(detailedError);
   }
 }
 
