@@ -179,17 +179,19 @@ export function decryptEntityBlob(
   entityId: number,
   version: number,
 ): Buffer {
+  const aad = aadFor(entityType, entityId, version);
   try {
-    return decryptBlob(ciphertext, dek, aadFor(entityType, entityId, version));
+    return decryptBlob(ciphertext, dek, aad);
   } catch (err: any) {
-    if (err.message?.includes('Unsupported state or unable to authenticate data')) {
-      throw new Error(
-        `Decryption failed for ${entityType} '${entityId}' v${version}. ` +
-        `This usually means the master password or entity DEK is incorrect for this machine. ` +
-        `(AAD: ${entityType}|${entityId}, Ciphertext length: ${ciphertext.length} bytes)`
-      );
-    }
-    throw err;
+    const msg = err.message ?? String(err);
+    throw new Error(
+      `Decryption failed for ${entityType} (id=${entityId}, v${version})\n` +
+      `  Error: ${msg}\n` +
+      `  AAD: ${aad.toString('utf-8')}\n` +
+      `  DEK size: ${dek.length} bytes\n` +
+      `  Ciphertext size: ${ciphertext.length} bytes\n` +
+      `  This usually indicates a master password mismatch or a corrupted keypair on this machine.`
+    );
   }
 }
 
