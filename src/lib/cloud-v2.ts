@@ -495,6 +495,133 @@ export class CloudV2 {
       active,
     });
   }
+
+  // -------------------------------------------------------------------------
+  // Generic entity helpers (Wave 3)
+  //
+  // These back the `history`, `diff`, `rollback` and entity-extras CLI
+  // commands. They are thin wrappers around the `/api/<entity>/:id/...`
+  // routes and use `project | workspace | config | module | profile` as
+  // the `entity` path prefix.
+  // -------------------------------------------------------------------------
+
+  /** Fetch the full version list for an entity, newest first. */
+  async listEntityVersions(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+  ): Promise<VersionRow[]> {
+    const out = await this.request<{ versions: VersionRow[] }>(
+      'GET',
+      `/api/${entity}s/${id}/versions`,
+    );
+    return out.versions ?? [];
+  }
+
+  /** Fetch and return an entity's current encrypted blob bytes. */
+  async getEntityBlob(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+  ): Promise<Buffer> {
+    const res = await this.requestRaw('GET', `/api/${entity}s/${id}/blob`);
+    if (!res.ok) {
+      throw new Error(
+        `GET /api/${entity}s/${id}/blob failed: ${res.status} ${res.statusText}`,
+      );
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /**
+   * Fetch a specific historical version's encrypted blob bytes.
+   * The route is `GET /api/<entity>s/:id/versions/:n` and returns the
+   * raw ciphertext directly (not a JSON wrapper).
+   */
+  async getEntityVersionBlob(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+    version: number,
+  ): Promise<Buffer> {
+    const res = await this.requestRaw(
+      'GET',
+      `/api/${entity}s/${id}/versions/${version}`,
+    );
+    if (!res.ok) {
+      throw new Error(
+        `GET /api/${entity}s/${id}/versions/${version} failed: ${res.status} ${res.statusText}`,
+      );
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /** Push a new encrypted version for any entity type. */
+  async pushEntityVersion(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+    ciphertextB64: string,
+    contentHash: string,
+  ): Promise<{ version: number; r2_key?: string; size_bytes?: number }> {
+    return this.request('POST', `/api/${entity}s/${id}/versions`, {
+      ciphertext: ciphertextB64,
+      content_hash: contentHash,
+      pushed_from_machine_id: null,
+    });
+  }
+
+  /** Generic PATCH for renaming an entity (used by workspace/config/module). */
+  async patchEntity(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    await this.request('PATCH', `/api/${entity}s/${id}`, body);
+  }
+
+  /** Generic DELETE (soft) for any entity. */
+  async deleteEntity(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+  ): Promise<void> {
+    await this.request('DELETE', `/api/${entity}s/${id}`);
+  }
+
+  /** Fetch an entity row with its wrapped DEK (current user). */
+  async getEntity(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+  ): Promise<{ entity: EntityRow; wrapped_dek: string | null }> {
+    const out = await this.request<any>('GET', `/api/${entity}s/${id}`);
+    // The project route returns {project, wrapped_dek}; normalise.
+    const row = out[entity] ?? out.entity ?? out;
+    return { entity: row as EntityRow, wrapped_dek: out.wrapped_dek ?? null };
+  }
+
+  /** Upload a wrapped DEK for an entity. */
+  async upsertEntityKey(
+    entity: 'project' | 'workspace' | 'config' | 'module' | 'profile',
+    id: number,
+    wrappedDekB64: string,
+    userId: number,
+  ): Promise<void> {
+    await this.request('POST', `/api/${entity}s/${id}/keys`, {
+      user_id: userId,
+      wrapped_dek: wrappedDekB64,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Version row shape (matches `entity_versions` table).
+// ---------------------------------------------------------------------------
+
+export interface VersionRow {
+  id: number;
+  version: number;
+  r2_key: string;
+  size_bytes: number;
+  content_hash: string;
+  pushed_by_user_id: number | null;
+  pushed_from_machine_id: string | null;
+  created_at: string;
 }
 
 export default CloudV2;

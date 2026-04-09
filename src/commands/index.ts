@@ -22,6 +22,10 @@ import { registerDiffCommand } from './diff.js';
 import { registerSetupCommand } from './setup.js';
 import { registerProjectCommand } from './project.js';
 import { registerVarsCommand } from './vars.js';
+import { registerWorkspaceCommand } from './workspace.js';
+import { registerConfigCommand } from './config.js';
+import { registerModuleCommand } from './module.js';
+import { registerRollbackCommand } from './rollback.js';
 
 export function registerCommands(program: Command): void {
   registerInitCommand(program);
@@ -47,4 +51,8 @@ export function registerCommands(program: Command): void {
   registerSetupCommand(program);
   registerProjectCommand(program);
   registerVarsCommand(program);
+  registerWorkspaceCommand(program);
+  registerConfigCommand(program);
+  registerModuleCommand(program);
+  registerRollbackCommand(program);
 }
