@@ -49,6 +49,7 @@ Core functionality implemented, preparing for public release.
 ## Phase 6: Enterprise (Q4 2025)
 - [ ] SSO integration (SAML, OIDC)
 - [ ] Self-hosted option
+- [ ] Bring-your-own storage backend: point the CLI at S3, GCS, or Azure Blob Storage to store encrypted state outside the ConfigSync service. CLI handles encryption/sync directly against the bucket; ConfigSync cloud is bypassed entirely (or used only for metadata/auth). Lets privacy-sensitive users keep all data in their own cloud account.
 - [ ] Advanced audit logs
 - [ ] Compliance reports
 - [ ] SLA guarantees
