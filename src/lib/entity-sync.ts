@@ -33,6 +33,8 @@ import {
   hashBlob,
 } from './entity-blob.js';
 import { executeHooks } from './hooks.js';
+import { captureEnvFilesFromDir } from './env-capture.js';
+import { DekCache } from './dek-cache.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -163,6 +165,74 @@ export async function pullProjectV2(opts: PullProjectOptions): Promise<void> {
   });
 
   console.log(chalk.green(`  Pull complete for '${project.slug}'.`));
+}
+
+// ---------------------------------------------------------------------------
+// Workspace pull
+// ---------------------------------------------------------------------------
+
+export interface PullWorkspaceOptions {
+  configManager: ConfigManager;
+  workspaceSlug: string;
+}
+
+export async function pullWorkspaceV2(opts: PullWorkspaceOptions): Promise<void> {
+  const { configManager, workspaceSlug } = opts;
+  const { cloud, sessionMgr } = await loadCloudAndSession(configManager);
+  const keypair = await unlockKeypair(sessionMgr);
+
+  // Find the workspace by slug.
+  const workspaces = await cloud.listWorkspaces();
+  const ws = workspaces.find((w) => w.slug === workspaceSlug);
+  if (!ws) {
+    throw new Error(`Workspace '${workspaceSlug}' not found on the server.`);
+  }
+
+  // Fetch wrapped DEK and blob.
+  const detail = await cloud.getEntity('workspace', ws.id);
+  if (!detail.wrapped_dek) {
+    throw new Error(`Workspace '${workspaceSlug}' has no wrapped DEK.`);
+  }
+  const dek = unwrapDEK(Buffer.from(detail.wrapped_dek, 'base64'), keypair);
+  const ciphertext = await cloud.getEntityBlob('workspace', ws.id);
+  const plaintext = decryptEntityBlob(
+    ciphertext,
+    dek,
+    'workspace',
+    ws.id,
+    ws.current_version,
+  );
+  const blob = bytesToBlob(plaintext);
+
+  // Extract member project IDs from the workspace blob.
+  const projectIds = (blob.extras?.project_ids as number[] | undefined) ?? [];
+  if (projectIds.length === 0) {
+    console.log(chalk.yellow(`Workspace '${workspaceSlug}' has no member projects.`));
+    return;
+  }
+
+  console.log(chalk.bold(`Pulling workspace '${workspaceSlug}' (${projectIds.length} projects)...`));
+
+  // Pull each project.
+  const projects = await cloud.listProjects();
+  for (const id of projectIds) {
+    const p = projects.find((x) => x.id === id);
+    if (!p) {
+      console.log(chalk.yellow(`  Project ID ${id} not found; skipping.`));
+      continue;
+    }
+    console.log(chalk.cyan(`\n  --- Pulling ${p.slug} ---`));
+    try {
+      await pullProjectV2({
+        configManager,
+        projectSlug: p.slug,
+      });
+    } catch (err: any) {
+      console.error(chalk.red(`  Failed to pull project '${p.slug}': ${err.message}`));
+    }
+  }
+
+  console.log(chalk.green(`\nWorkspace '${workspaceSlug}' pull complete.`));
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +383,48 @@ export async function runSync(configManager: ConfigManager, options: SyncOptions
   if (!options.dryRun && commits.length > 0) {
     await cloud.syncCommit(cloud.machineId, commits);
   }
+
+  // Auto-capture .env* files as structured variables for every linked
+  // project. This keeps the dashboard Variables tab in sync with what's
+  // actually on disk without the user having to remember `vars push`.
+  // Idempotent: values are upserted, not merged or deleted. Skipped in
+  // dry-run mode. Failures are non-fatal — we still report sync as OK.
+  if (!options.dryRun) {
+    const dekCache = new DekCache(configManager.configDir);
+    const userId = sessionMgr.load().user_id;
+    let totalCaptured = 0;
+    const capturedPerProject: { slug: string; count: number }[] = [];
+    for (const lp of scopedLocal) {
+      try {
+        const captured = await captureEnvFilesFromDir(
+          { cloud, keypair, dekCache, userId },
+          lp.project.id,
+          lp.localPath,
+        );
+        if (captured.totalVars > 0) {
+          totalCaptured += captured.totalVars;
+          capturedPerProject.push({ slug: lp.project.slug, count: captured.totalVars });
+        }
+      } catch (err: any) {
+        console.log(
+          chalk.yellow(
+            `  Variable capture skipped for ${lp.project.slug}: ${err.message ?? err}`,
+          ),
+        );
+      }
+    }
+    if (totalCaptured > 0) {
+      console.log(
+        chalk.green(
+          `  Captured ${totalCaptured} variable(s) from .env files across ${capturedPerProject.length} project(s):`,
+        ),
+      );
+      for (const p of capturedPerProject) {
+        console.log(chalk.dim(`    ${p.slug}: ${p.count}`));
+      }
+    }
+  }
+
   console.log(chalk.green(`Sync complete (${commits.length} entity updates).`));
   await executeHooks('post_sync', config, { silent: options.dryRun });
   return 0;

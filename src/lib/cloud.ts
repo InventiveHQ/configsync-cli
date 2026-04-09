@@ -173,7 +173,15 @@ class CloudBackend {
       delete_missing: options?.deleteCloudOnly ?? false,
     });
     if (!response.ok) {
-      throw new Error(`Failed to sync environments: ${response.status} ${response.statusText}`);
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = (await response.json()) as { error?: string; detail?: string; cause?: string };
+        if (body?.detail) detail = `${detail} — ${body.detail}`;
+        if (body?.cause) detail = `${detail} (cause: ${body.cause})`;
+      } catch {
+        // non-JSON body; stick with status
+      }
+      throw new Error(`Failed to sync environments: ${detail}`);
     }
     const data = await response.json() as any;
     return data.environments || [];

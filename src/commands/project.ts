@@ -32,6 +32,8 @@ import {
   encryptEntityBlob,
 } from '../lib/entity-blob.js';
 import { inspectGit, slugify } from '../lib/git-info.js';
+import { captureEnvFilesFromDir } from '../lib/env-capture.js';
+import { DekCache } from '../lib/dek-cache.js';
 
 export function registerProjectCommand(program: Command): void {
   const cmd = program
@@ -194,13 +196,28 @@ export async function addProject(
     if (matches.length > 0) project = matches[0];
   }
   if (!project) {
-    project = await cloud.createProject({
-      slug,
-      name: slug,
-      git_url: gitUrl,
-      git_branch: gitBranch,
-    });
-    console.log(chalk.green(`Created project '${project.slug}' (id=${project.id})`));
+    try {
+      project = await cloud.createProject({
+        slug,
+        name: slug,
+        git_url: gitUrl,
+        git_branch: gitBranch,
+      });
+      console.log(chalk.green(`Created project '${project.slug}' (id=${project.id})`));
+    } catch (err: any) {
+      // Fallback dedupe: another project already owns this slug (e.g. created
+      // without a git_url, so the git_url query above missed it). Look it up
+      // by slug and reuse rather than failing the whole flow.
+      if (err?.message && /already exists/i.test(err.message)) {
+        const all = await cloud.listProjects();
+        const bySlug = all.find((p) => p.slug === slug);
+        if (!bySlug) throw err;
+        project = bySlug;
+        console.log(chalk.dim(`Reusing existing project '${project.slug}' (id=${project.id})`));
+      } else {
+        throw err;
+      }
+    }
   } else {
     console.log(chalk.dim(`Reusing existing project '${project.slug}' (id=${project.id})`));
   }
@@ -244,6 +261,32 @@ export async function addProject(
   // Link to this machine.
   await cloud.linkMachineProject(cloud.machineId, project.id, rootDir);
   console.log(chalk.green(`  Linked to machine ${cloud.machineId}`));
+
+  // Auto-capture .env* files as structured variables so the dashboard
+  // Variables tab is populated without a separate `vars push` step.
+  // Idempotent upsert — re-running refreshes values but does not delete.
+  try {
+    const dekCache = new DekCache(configManager.configDir);
+    const captured = await captureEnvFilesFromDir(
+      { cloud, keypair, dekCache, userId: sessionMgr.load().user_id },
+      project.id,
+      rootDir,
+    );
+    if (captured.totalVars > 0) {
+      console.log(
+        chalk.green(`  Captured ${captured.totalVars} variable(s) from .env files:`),
+      );
+      for (const f of captured.files) {
+        console.log(
+          chalk.dim(
+            `    ${f.file} → ${f.tier}/${f.visibility} (${f.count} var${f.count !== 1 ? 's' : ''})`,
+          ),
+        );
+      }
+    }
+  } catch (err: any) {
+    console.log(chalk.yellow(`  Variable capture skipped: ${err.message ?? err}`));
+  }
 
   return project;
 }

@@ -24,7 +24,7 @@ import { getRestoreLevels } from '../lib/dependency-graph.js';
 import { executeHooks } from '../lib/hooks.js';
 import { runBootstrapIfNeeded } from '../lib/bootstrap.js';
 import { SessionManager } from '../lib/session.js';
-import { pullProjectV2 } from '../lib/entity-sync.js';
+import { pullProjectV2, pullWorkspaceV2 } from '../lib/entity-sync.js';
 
 function resolveHome(p: string): string {
   return path.resolve(p.replace(/^~/, os.homedir()));
@@ -380,6 +380,7 @@ export function registerPullCommand(program: Command): void {
     .option('--from <machine>', 'pull from a specific machine (name or ID)')
     .option('--group <name>', 'only pull a specific project group')
     .option('--project <name>', 'only pull a specific project')
+    .option('--workspace <name>', 'v2: only pull a specific workspace')
     .option('--list-machines', 'list available machines to pull from')
     .option('--install', 'install missing packages after pull')
     .option('--install-yes', 'install missing packages without prompting')
@@ -399,6 +400,7 @@ export function registerPullCommand(program: Command): void {
       from?: string;
       group?: string;
       project?: string;
+      workspace?: string;
       listMachines?: boolean;
       install?: boolean;
       installYes?: boolean;
@@ -428,16 +430,23 @@ export function registerPullCommand(program: Command): void {
         process.exit(2);
       }
 
-      // v2: if a v2 session exists and --project is supplied, use the v2
-      // entity-based pull flow. Fall back to legacy pull otherwise.
+      // v2: if a v2 session exists and --project or --workspace is supplied,
+      // use the v2 entity-based pull flow. Fall back to legacy pull otherwise.
       const v2Session = new SessionManager(configManager.configDir);
-      if (options.project && v2Session.exists()) {
+      if ((options.project || options.workspace) && v2Session.exists()) {
         try {
-          await pullProjectV2({
-            configManager,
-            projectSlug: options.project,
-            targetPath: options.path,
-          });
+          if (options.workspace) {
+            await pullWorkspaceV2({
+              configManager,
+              workspaceSlug: options.workspace,
+            });
+          } else if (options.project) {
+            await pullProjectV2({
+              configManager,
+              projectSlug: options.project!,
+              targetPath: options.path,
+            });
+          }
           process.exit(0);
         } catch (err: any) {
           console.error(chalk.red(`Pull failed: ${err.message ?? err}`));

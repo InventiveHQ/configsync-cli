@@ -11,7 +11,7 @@ import { mutateWorkspaceProjectList } from './workspace.js';
 import { SessionManager } from '../lib/session.js';
 import CloudV2 from '../lib/cloud-v2.js';
 import { promptPassword } from '../lib/prompt.js';
-import { slugify } from '../lib/git-info.js';
+import { slugify, inspectGit } from '../lib/git-info.js';
 import { generateDEK, wrapDEK, type UserKeypair } from '../lib/envelope-crypto.js';
 import {
   type EntityBlob,
@@ -191,33 +191,62 @@ export function registerAddCommand(program: Command): void {
         process.exit(3);
       }
 
+      // Cloud client is needed both for the per-subdir fallback lookup and
+      // for workspace creation below, so build it up front.
+      const apiUrl = configManager.load().sync.config.api_url as string;
+      const apiKey = configManager.load().sync.config.api_key as string;
+      const machineId = sessionMgr.load().machine_id;
+      const userId = sessionMgr.load().user_id;
+      const cloud = new CloudV2(apiUrl, apiKey, machineId);
+
       try {
-        // Step 1: add each subfolder as a project
-        const projectSlugs: string[] = [];
-        const projectIds: number[] = [];
+        // Step 1: resolve each subfolder to a server-side project slug.
+        // If addProject fails (e.g. permission error, or a pre-revive server
+        // returning 409), fall back to looking the project up by the slug it
+        // would have used. We only skip a subdir if *neither* path finds it —
+        // the goal is to create the workspace and link every project that
+        // actually exists server-side, not to abort the whole flow because
+        // some projects were already there.
+        const resolvedSlugs: string[] = [];
         for (const subdir of subdirs) {
           console.log(chalk.cyan(`\n→ ${path.basename(subdir)}`));
+          let resolved: string | null = null;
           try {
             const project = await addProject(subdir, {});
-            projectSlugs.push(project.slug);
-            projectIds.push(project.id);
+            resolved = project.slug;
           } catch (err: any) {
-            console.error(chalk.red(`  Failed: ${err.message}`));
+            console.error(chalk.red(`  addProject failed: ${err.message}`));
+            // Derive the slug addProject would have used and look it up.
+            const gi = inspectGit(subdir);
+            const fallbackSlug = gi.url ? slugify(gi.url) : slugify(path.basename(subdir));
+            try {
+              const existing = (await cloud.listProjects()).find(
+                (p) => p.slug === fallbackSlug,
+              );
+              if (existing) {
+                console.log(
+                  chalk.dim(
+                    `  Found existing project '${existing.slug}' (id=${existing.id}); will link to workspace`,
+                  ),
+                );
+                resolved = existing.slug;
+              }
+            } catch (lookupErr: any) {
+              console.error(chalk.red(`  Lookup also failed: ${lookupErr.message}`));
+            }
           }
+          if (resolved) resolvedSlugs.push(resolved);
         }
 
-        if (projectIds.length === 0) {
-          console.error(chalk.red('\nNo projects were added; not creating workspace.'));
+        if (resolvedSlugs.length === 0) {
+          console.error(
+            chalk.red('\nNo projects could be resolved; skipping workspace creation.'),
+          );
           process.exit(1);
         }
 
         // Step 2: create the workspace entity (with DEK + initial empty blob)
         console.log(chalk.cyan(`\n→ Creating workspace '${workspaceSlug}'`));
-        const apiUrl = configManager.load().sync.config.api_url as string;
-        const apiKey = configManager.load().sync.config.api_key as string;
-        const machineId = sessionMgr.load().machine_id;
-        const userId = sessionMgr.load().user_id;
-        const cloud = new CloudV2(apiUrl, apiKey, machineId);
 
         const existing = await cloud.listWorkspaces();
         const match = existing.find((w: any) => w.slug === workspaceSlug);
@@ -254,9 +283,14 @@ export function registerAddCommand(program: Command): void {
           console.log(chalk.dim('  Pushed v1 (empty)'));
         }
 
-        // Step 3: link each project to the workspace via the encrypted blob
-        console.log(chalk.cyan(`\n→ Linking ${projectSlugs.length} projects to workspace`));
-        for (const slug of projectSlugs) {
+        // Step 3: link each project to the workspace via the encrypted blob.
+        // mutateWorkspaceProjectList is idempotent — already-linked projects
+        // print a "already in workspace" line and return without re-pushing,
+        // so re-running this command safely reconciles membership. A project
+        // can also be a member of multiple workspaces; nothing here enforces
+        // single-workspace membership.
+        console.log(chalk.cyan(`\n→ Linking ${resolvedSlugs.length} projects to workspace`));
+        for (const slug of resolvedSlugs) {
           try {
             await mutateWorkspaceProjectList(workspaceSlug, slug, 'add');
             console.log(chalk.dim(`  ${slug}`));
@@ -265,7 +299,11 @@ export function registerAddCommand(program: Command): void {
           }
         }
 
-        console.log(chalk.green.bold(`\n✓ Workspace '${workspaceSlug}' ready with ${projectIds.length} projects`));
+        console.log(
+          chalk.green.bold(
+            `\n✓ Workspace '${workspaceSlug}' ready with ${resolvedSlugs.length} projects`,
+          ),
+        );
         console.log(chalk.dim(`\nOn another machine: configsync pull --workspace ${workspaceSlug}`));
       } finally {
         if (!hadEnvPassword) delete process.env.CONFIGSYNC_MASTER_PASSWORD;
