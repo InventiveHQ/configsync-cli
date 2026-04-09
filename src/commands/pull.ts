@@ -375,7 +375,7 @@ const RESTORE_FNS: Record<string, (ctx: RestoreContext) => void> = {
 export function registerPullCommand(program: Command): void {
   program
     .command('pull')
-    .description('Pull and restore state from sync backend')
+    .description('Pull and restore entities from sync backend (use --project <slug> or --workspace <slug>)')
     .option('--force', 'overwrite existing files without backup', false)
     .option('--from <machine>', 'pull from a specific machine (name or ID)')
     .option('--group <name>', 'only pull a specific project group')

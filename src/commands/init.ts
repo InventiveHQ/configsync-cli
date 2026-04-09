@@ -40,7 +40,7 @@ interface InitOptions {
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
-    .description('Initialize ConfigSync on this machine (cloud by default)')
+    .description('Initialize ConfigSync on this machine: generate X25519 keypair, create default profile (cloud by default)')
     .addOption(
       new Option('--sync-backend <backend>', 'sync backend to use')
         .choices(['local', 'cloud'])

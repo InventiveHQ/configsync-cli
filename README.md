@@ -1,125 +1,96 @@
-# DeveloperSync CLI
+# ConfigSync CLI
 
-> Sync your development environment between machines - git repos, secrets, configs, and more.
+> Cross-machine sync for your development environment — projects, dotfiles, modules, env variables, and packages — with zero-knowledge encryption.
 
-[![PyPI Version](https://img.shields.io/pypi/v/devsync)](https://pypi.org/project/devsync/)
+[![npm](https://img.shields.io/npm/v/@inventivehq/configsync)](https://www.npmjs.com/package/@inventivehq/configsync)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Installation
-
-### Quick Install (from [developersync.com](https://developersync.com))
+## Install
 
 ```bash
-# Sign in at developersync.com and copy your personalized install command
-curl -sSL https://developersync.com/install | sh -s -- --token=YOUR_TOKEN
+npm install -g @inventivehq/configsync
 ```
 
-### Manual Install
+Requires Node.js >= 18. No native dependencies.
+
+## Quick start
 
 ```bash
-pip install devsync
-devsync auth  # Authenticate with DeveloperSync
+# First machine — creates your keypair and default profile
+configsync login --token <your-token>
+
+# Track a project
+configsync project add ~/git/my-app
+
+# Set an environment variable
+configsync vars set DATABASE_URL=postgres://... --project my-app --env dev
+
+# Push everything to the cloud
+configsync push
+
+# On another machine — same account, same password
+configsync login --token <your-token>
+configsync pull --project my-app
+configsync sync                          # bidirectional from here on
 ```
 
-## Quick Start
+## Key concepts
 
-```bash
-# Initialize on your first machine
-devsync init
+### Entities
 
-# Add git repositories
-devsync add repo git@github.com:you/project.git ~/projects/project
+ConfigSync v2 has five user-owned entity types: **project** (a git repo + dotfiles + env declarations), **workspace** (a logical grouping of projects), **config** (a standalone dotfile like `~/.zshrc`), **module** (a tool-specific file bundle from a curated catalog — ssh, vscode, git, zsh, etc.), and **profile** (a container of workspaces, modules, and packages that activates together). Every entity is versioned and encrypted.
 
-# Add environment files
-devsync add env ~/projects/myapp --filename .env.local
+### Profiles
 
-# Add config files
-devsync add config ~/.gitconfig
+A profile bundles the content that belongs to a context. A contractor with three clients has three profiles. A solo developer has one `default` profile that holds "always installed" tools. Profiles are first-class cloud entities — portable across machines, versioned, encrypted.
 
-# Store secrets securely
-devsync secret set OPENAI_API_KEY
-devsync secret set GITHUB_TOKEN
+### Envelope encryption
 
-# Push your state
-devsync push -m "MacBook Pro setup"
-
-# On your second machine, pull the state
-devsync pull
-```
-
-## Core Features
-
-- **🔄 Git Repository Sync** - Clone and track multiple repos with branch states
-- **🔐 Secure Secrets** - Encrypted storage with multiple provider backends
-- **📁 Config Management** - Sync dotfiles, tool configs, and settings
-- **🌍 Environment Files** - Manage `.env` files across projects
-- **🔌 Plugin System** - Extensible architecture for any tool
-- **☁️ Cloud Sync** - Push/pull state via DeveloperSync cloud
-
-## Plugin System
-
-DeveloperSync uses a plugin architecture to support any development tool:
-
-```bash
-# Install official plugins
-devsync plugin add devsync-plugins/vscode
-devsync plugin add devsync-plugins/cursor
-
-# Install community plugins
-devsync plugin add github:user/devsync-plugin-custom
-```
-
-See [devsync-plugins](https://github.com/developersync/devsync-plugins) for official plugins.
+Your master password derives a KEK (PBKDF2-HMAC-SHA256, 600k iterations, server-stored salt) which unwraps an X25519 keypair. The keypair unwraps per-entity DEKs (tweetnacl sealed boxes), which decrypt content blobs (AES-256-GCM). The password never leaves the client. The server sees variable names for indexing but never sees plaintext values.
 
 ## Commands
 
-### Core Commands
-- `devsync init` - Initialize DeveloperSync
-- `devsync push` - Save current state
-- `devsync pull` - Restore saved state
-- `devsync status` - Show sync status
-- `devsync diff` - Show differences
+| Command | Description |
+|---------|-------------|
+| `login` | Log in to ConfigSync cloud (fetches/creates keypair) |
+| `init` | Initialize ConfigSync on this machine (generates keypair, creates default profile) |
+| `project add\|list\|show\|rename\|delete` | Manage project entities |
+| `workspace add\|list\|show\|rename\|delete\|add-project\|remove-project` | Manage workspaces |
+| `config add\|list\|show\|rename\|delete` | Manage config (dotfile) entities |
+| `module add\|list\|show\|delete` | Manage module entities |
+| `profile add\|list\|show\|rename\|delete\|add-workspace\|remove-workspace\|add-package\|remove-package\|activate\|deactivate` | Manage profile entities |
+| `vars set\|unset\|list\|render\|push` | Structured per-project env variables |
+| `env list\|create\|activate\|deactivate\|current\|shell\|hook\|delete\|vars` | Environment tiers (dev/staging/prod) |
+| `sync` | Bidirectional per-entity 3-way sync with conflict resolution |
+| `pull` | Materialize entities onto the local machine |
+| `push` | Push current state to sync backend |
+| `history` | Per-entity version history and whole-state snapshots |
+| `diff` | Compare local state against a historical entity version |
+| `rollback` | Roll an entity or snapshot back to a previous version |
+| `watch` | Auto-sync on file changes (debounced) |
+| `status` | Show current sync status |
+| `list` | Show all tracked items by type |
+| `doctor` | Diagnose common local-state problems |
+| `scan` | Scan for installed packages and save to sync state |
 
-### Management Commands
-- `devsync add <type>` - Add items to sync (repo/env/config)
-- `devsync remove <type>` - Remove items from sync
-- `devsync list` - List all tracked items
+Run `configsync <command> --help` for full flag documentation.
 
-### Secret Commands
-- `devsync secret set <key>` - Store a secret
-- `devsync secret get <key>` - Retrieve a secret
-- `devsync secret list` - List all secrets
+## Environment variables
 
-### Plugin Commands
-- `devsync plugin add <source>` - Install a plugin
-- `devsync plugin list` - List installed plugins
-- `devsync plugin remove <name>` - Uninstall a plugin
+| Variable | Purpose |
+|----------|---------|
+| `CONFIGSYNC_MASTER_PASSWORD` | Master password for non-interactive use (CI, scripts) |
+| `CONFIGSYNC_MASTER_PASSWORD_FILE` | Path to a file containing the master password |
+| `CONFIGSYNC_PROFILE` | Override the active profile for the current session |
+| `CONFIGSYNC_ENV` | Override the active environment tier for the current session |
 
-## Security
+## Links
 
-- Master password protection with PBKDF2 (100,000 iterations)
-- AES-256 encryption for all sensitive data
-- Secure cloud sync via DeveloperSync API
-- Local-first architecture - works offline
-- Zero-knowledge encryption available
-
-## Documentation
-
-- [Installation Guide](https://developersync.com/docs/install)
-- [Plugin Development](https://developersync.com/docs/plugins)
-- [API Reference](https://developersync.com/docs/api)
-- [Security Model](https://developersync.com/docs/security)
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Support
-
-- [Documentation](https://developersync.com/docs)
-- [Discord Community](https://discord.gg/devsync)
-- [GitHub Issues](https://github.com/developersync/devsync-cli/issues)
+- [Documentation](https://configsync.dev/docs) — user-facing docs with command examples
+- [Architecture](https://configsync.dev/docs/architecture) — conceptual model and crypto design
+- [GitHub Issues](https://github.com/InventiveHQ/configsync-cli/issues) — bug reports and feature requests
+- [Discord](https://discord.gg/configsync) — community support
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.

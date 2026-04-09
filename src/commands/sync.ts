@@ -118,7 +118,7 @@ function mergeCloudToLocal(
 export function registerSyncCommand(program: Command): void {
   program
     .command('sync')
-    .description('Bidirectional sync: merge local and cloud environments, then apply pending actions')
+    .description('Bidirectional sync: pull + push linked entities with 3-way conflict resolution')
     .option('-y, --yes', 'skip confirmation prompt')
     .option('--no-delete-local', 'keep local environments even if deleted on cloud')
     .option('--no-delete-cloud', 'keep cloud environments even if deleted locally')

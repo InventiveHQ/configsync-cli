@@ -24,7 +24,7 @@ import { SessionManager } from '../lib/session.js';
 export function registerLoginCommand(program: Command): void {
   program
     .command('login')
-    .description('Log in to ConfigSync cloud on this machine')
+    .description('Log in to ConfigSync cloud on this machine (retrieves and unwraps your keypair, or creates one on first login)')
     .option('--token <token>', 'API token')
     .option('--api-url <url>', 'API base URL', 'https://configsync.dev')
     .action(async (options: { token?: string; apiUrl: string }) => {
