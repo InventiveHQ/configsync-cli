@@ -99,9 +99,10 @@ export async function pullProjectV2(opts: PullProjectOptions): Promise<void> {
   const { cloud, sessionMgr } = await loadCloudAndSession(configManager);
   const keypair = await unlockKeypair(sessionMgr);
 
-  // Find the project by slug.
+  // Find the project by slug (case-insensitive).
+  const normalizedSlug = projectSlug.toLowerCase();
   const projects = await cloud.listProjects();
-  const project = projects.find((p) => p.slug === projectSlug);
+  const project = projects.find((p) => p.slug.toLowerCase() === normalizedSlug);
   if (!project) {
     throw new Error(`Project '${projectSlug}' not found on the server.`);
   }
@@ -181,9 +182,10 @@ export async function pullWorkspaceV2(opts: PullWorkspaceOptions): Promise<void>
   const { cloud, sessionMgr } = await loadCloudAndSession(configManager);
   const keypair = await unlockKeypair(sessionMgr);
 
-  // Find the workspace by slug.
+  // Find the workspace by slug (case-insensitive).
+  const normalizedSlug = workspaceSlug.toLowerCase();
   const workspaces = await cloud.listWorkspaces();
-  const ws = workspaces.find((w) => w.slug === workspaceSlug);
+  const ws = workspaces.find((w) => w.slug.toLowerCase() === normalizedSlug);
   if (!ws) {
     throw new Error(`Workspace '${workspaceSlug}' not found on the server.`);
   }
