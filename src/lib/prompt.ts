@@ -18,7 +18,7 @@ let stdinLines: string[] | null = null;
  * Returns null if neither is set, in which case callers should fall back to
  * the interactive prompt.
  */
-function passwordFromEnv(): string | null {
+export function passwordFromEnv(): string | null {
   const direct = process.env.CONFIGSYNC_MASTER_PASSWORD;
   if (direct !== undefined && direct !== '') {
     return direct;
