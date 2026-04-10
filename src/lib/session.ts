@@ -91,11 +91,20 @@ export class SessionManager {
       kekSalt: Buffer.from(s.kek_salt_b64, 'base64'),
       kekIterations: s.kek_iterations,
     };
-    const privateKey = unwrapPrivateKey(wrapped, password);
-    return {
-      publicKey: Buffer.from(s.public_key_b64, 'base64'),
-      privateKey,
-    };
+    try {
+      const privateKey = unwrapPrivateKey(wrapped, password);
+      return {
+        publicKey: Buffer.from(s.public_key_b64, 'base64'),
+        privateKey,
+      };
+    } catch (err: any) {
+      throw new Error(
+        `Failed to unwrap private key: ${err.message ?? String(err)}\n` +
+        `  Salt: ${s.kek_salt_b64}\n` +
+        `  Iterations: ${s.kek_iterations}\n` +
+        `  This usually means the master password does not match the one used during 'login' on THIS machine.`
+      );
+    }
   }
 
   /**
