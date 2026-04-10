@@ -192,7 +192,19 @@ export function unwrapPrivateKey(wrapped: EncryptedPrivateKey, password: string)
     PBKDF2_DIGEST,
   );
 
-  return decryptWithKey(wrapped.ciphertext, kek);
+  try {
+    return decryptWithKey(wrapped.ciphertext, kek);
+  } catch (err: any) {
+    if (err.message?.includes('Unsupported state or unable to authenticate data')) {
+      process.stderr.write(
+        `\n--- PRIVATE KEY UNWRAP FAILURE ---\n` +
+        `Password does not match session on this machine.\n` +
+        `Salt: ${wrapped.kekSalt.toString('hex')}\n` +
+        `----------------------------------\n\n`
+      );
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
