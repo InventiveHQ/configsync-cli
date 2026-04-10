@@ -415,8 +415,12 @@ export function registerPullCommand(program: Command): void {
       rerunBootstrap?: boolean;
       iKnowWhatImDoing?: boolean;
       path?: string;
+      verbose?: boolean;
     }) => {
       const configManager = new ConfigManager();
+      const isVerbose = options.verbose || program.opts().verbose;
+
+      if (isVerbose) console.log(chalk.blue(`[verbose] Starting pull. Type: ${typeArg ?? 'default'}, Slug: ${slugArg ?? 'none'}`));
 
       // Normalize v2 entity pull (positional vs flag)
       let projectSlug = options.project;
@@ -426,11 +430,9 @@ export function registerPullCommand(program: Command): void {
         projectSlug = slugArg;
       } else if (typeArg === 'workspace' && slugArg) {
         workspaceSlug = slugArg;
-      } else if (typeArg && !slugArg) {
-        // Handle `pull <slug>` case by checking if it matches an option
-        // or just treating it as a project by default? 
-        // For now, let's stick to explicit `pull workspace <slug>`
       }
+
+      if (isVerbose) console.log(chalk.blue(`[verbose] Resolved slugs - Project: ${projectSlug ?? 'none'}, Workspace: ${workspaceSlug ?? 'none'}`));
 
       if (!configManager.exists()) {
         console.error(chalk.red("Error: Run 'configsync init' first."));
@@ -447,14 +449,18 @@ export function registerPullCommand(program: Command): void {
       // v2: if a v2 session exists and --project or --workspace is supplied,
       // use the v2 entity-based pull flow. Fall back to legacy pull otherwise.
       const v2Session = new SessionManager(configManager.configDir);
+      if (isVerbose) console.log(chalk.blue(`[verbose] V2 session exists: ${v2Session.exists()}`));
+
       if ((projectSlug || workspaceSlug) && v2Session.exists()) {
         try {
           if (workspaceSlug) {
+            if (isVerbose) console.log(chalk.blue(`[verbose] Triggering pullWorkspaceV2 for ${workspaceSlug}`));
             await pullWorkspaceV2({
               configManager,
               workspaceSlug,
             });
           } else if (projectSlug) {
+            if (isVerbose) console.log(chalk.blue(`[verbose] Triggering pullProjectV2 for ${projectSlug}`));
             await pullProjectV2({
               configManager,
               projectSlug,
@@ -463,6 +469,7 @@ export function registerPullCommand(program: Command): void {
           }
           process.exit(0);
         } catch (err: any) {
+          if (isVerbose) console.error(chalk.red(`[verbose] V2 Pull Error: ${err.stack ?? err}`));
           console.error(chalk.red(`Pull failed: ${err.message ?? err}`));
           process.exit(1);
         }
