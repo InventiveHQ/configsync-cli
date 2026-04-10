@@ -299,6 +299,13 @@ export function unwrapDEK(wrapped: Buffer, recipientKeypair: UserKeypair): Buffe
 
   const dek = nacl.box.open(ciphertext, nonce, ephemeralPub, recipientSec);
   if (dek === null) {
+    process.stderr.write(
+      `\n--- DEK UNWRAP FAILURE ---\n` +
+      `Failed to unwrap the entity key using this machine's private key.\n` +
+      `This happens if the entity was created/updated using a DIFFERENT public key.\n` +
+      `Recipient PubKey: ${recipientKeypair.publicKey.toString('hex')}\n` +
+      `--------------------------\n\n`
+    );
     throw new Error('Failed to unwrap DEK: authentication failed');
   }
 
