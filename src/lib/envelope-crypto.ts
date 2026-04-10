@@ -24,6 +24,7 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import nacl from 'tweetnacl';
 
 // ---------------------------------------------------------------------------
@@ -195,14 +196,14 @@ export function unwrapPrivateKey(wrapped: EncryptedPrivateKey, password: string)
   try {
     return decryptWithKey(wrapped.ciphertext, kek);
   } catch (err: any) {
-    if (err.message?.includes('Unsupported state or unable to authenticate data')) {
-      process.stderr.write(
-        `\n--- PRIVATE KEY UNWRAP FAILURE ---\n` +
-        `Password does not match session on this machine.\n` +
-        `Salt: ${wrapped.kekSalt.toString('hex')}\n` +
-        `----------------------------------\n\n`
-      );
-    }
+    const msg = err.message ?? String(err);
+    const detail = 
+      `\n!!! PRIVATE KEY UNWRAP FAILURE !!!\n` +
+      `Error: ${msg}\n` +
+      `Salt: ${wrapped.kekSalt.toString('hex')}\n` +
+      `Iterations: ${wrapped.kekIterations}\n` +
+      `!!! -------------------------- !!!\n`;
+    fs.writeSync(2, detail);
     throw err;
   }
 }
@@ -299,13 +300,11 @@ export function unwrapDEK(wrapped: Buffer, recipientKeypair: UserKeypair): Buffe
 
   const dek = nacl.box.open(ciphertext, nonce, ephemeralPub, recipientSec);
   if (dek === null) {
-    process.stderr.write(
-      `\n--- DEK UNWRAP FAILURE ---\n` +
-      `Failed to unwrap the entity key using this machine's private key.\n` +
-      `This happens if the entity was created/updated using a DIFFERENT public key.\n` +
+    const detail = 
+      `\n!!! DEK UNWRAP FAILURE !!!\n` +
       `Recipient PubKey: ${recipientKeypair.publicKey.toString('hex')}\n` +
-      `--------------------------\n\n`
-    );
+      `!!! ------------------ !!!\n`;
+    fs.writeSync(2, detail);
     throw new Error('Failed to unwrap DEK: authentication failed');
   }
 
@@ -372,16 +371,13 @@ export function decryptBlob(ciphertext: Buffer, dek: Buffer, aad?: Buffer): Buff
     return Buffer.concat([decipher.update(ct), decipher.final()]);
   } catch (err: any) {
     const msg = err.message ?? String(err);
-    process.stderr.write(
-      `\n--- BLOB DECRYPTION FAILURE ---\n` +
+    const detail = 
+      `\n!!! BLOB DECRYPTION FAILURE !!!\n` +
       `Error: ${msg}\n` +
-      `DEK (hex): ${dek.toString('hex')}\n` +
       `AAD (raw): ${aad ? aad.toString('utf-8') : 'none'}\n` +
-      `IV (hex): ${iv.toString('hex')}\n` +
-      `AuthTag (hex): ${authTag.toString('hex')}\n` +
       `Ciphertext size: ${ct.length} bytes\n` +
-      `-------------------------------\n\n`
-    );
+      `!!! ----------------------- !!!\n`;
+    fs.writeSync(2, detail);
     throw err;
   }
 }

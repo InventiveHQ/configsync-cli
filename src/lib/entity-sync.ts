@@ -67,11 +67,7 @@ async function loadCloudAndSession(configManager: ConfigManager): Promise<{
 
 async function unlockKeypair(sessionMgr: SessionManager): Promise<UserKeypair> {
   const password = await promptPassword('Enter master password: ');
-  try {
-    return sessionMgr.unlockKeypair(password);
-  } catch {
-    throw new Error('Incorrect master password.');
-  }
+  return sessionMgr.unlockKeypair(password);
 }
 
 function gitCloneIfMissing(url: string | undefined, branch: string | undefined, target: string): void {
