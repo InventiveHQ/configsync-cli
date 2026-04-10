@@ -192,7 +192,8 @@ export function decryptEntityBlob(
       `  Ciphertext size: ${ciphertext.length} bytes\n` +
       `  This usually indicates a master password mismatch or a corrupted keypair on this machine.`;
     
-    // Log directly to stderr to bypass any possible catch-and-silence logic
+    // Log everywhere to ensure visibility
+    console.error(`\n--- DECRYPTION ERROR ---\n${detailedError}\n-----------------------\n`);
     process.stderr.write(`\n--- DECRYPTION ERROR ---\n${detailedError}\n-----------------------\n\n`);
     
     throw new Error(detailedError);

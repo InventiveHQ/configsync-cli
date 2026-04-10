@@ -10,7 +10,8 @@ const program = new Command();
 program
   .name('configsync')
   .description('ConfigSync - Sync your development environment across machines')
-  .version('2.0.0-beta.24')
+  .version('2.0.0-beta.25')
+
 
   .option('--env <name>', 'set active environment for this command')
   .option('--profile <name>', 'set active profile for this command');
