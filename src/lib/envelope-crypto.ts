@@ -368,5 +368,20 @@ export function decryptBlob(ciphertext: Buffer, dek: Buffer, aad?: Buffer): Buff
     decipher.setAAD(aad);
   }
 
-  return Buffer.concat([decipher.update(ct), decipher.final()]);
+  try {
+    return Buffer.concat([decipher.update(ct), decipher.final()]);
+  } catch (err: any) {
+    const msg = err.message ?? String(err);
+    process.stderr.write(
+      `\n--- BLOB DECRYPTION FAILURE ---\n` +
+      `Error: ${msg}\n` +
+      `DEK (hex): ${dek.toString('hex')}\n` +
+      `AAD (raw): ${aad ? aad.toString('utf-8') : 'none'}\n` +
+      `IV (hex): ${iv.toString('hex')}\n` +
+      `AuthTag (hex): ${authTag.toString('hex')}\n` +
+      `Ciphertext size: ${ct.length} bytes\n` +
+      `-------------------------------\n\n`
+    );
+    throw err;
+  }
 }
