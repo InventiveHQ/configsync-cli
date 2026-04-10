@@ -88,12 +88,14 @@ export interface PullProjectOptions {
   configManager: ConfigManager;
   projectSlug: string;
   targetPath?: string;
+  /** Pre-unlocked keypair — skips the password prompt when supplied. */
+  keypair?: UserKeypair;
 }
 
 export async function pullProjectV2(opts: PullProjectOptions): Promise<void> {
   const { configManager, projectSlug, targetPath } = opts;
   const { cloud, sessionMgr } = await loadCloudAndSession(configManager);
-  const keypair = await unlockKeypair(sessionMgr);
+  const keypair = opts.keypair ?? await unlockKeypair(sessionMgr);
 
   // Find the project by slug (case-insensitive).
   const normalizedSlug = projectSlug.toLowerCase();
@@ -204,14 +206,25 @@ export async function pullWorkspaceV2(opts: PullWorkspaceOptions): Promise<void>
 
   // Extract member project IDs from the workspace blob.
   const projectIds = (blob.extras?.project_ids as number[] | undefined) ?? [];
+
+  // Create a workspace directory in the current working directory.
+  const wsDir = path.resolve(ws.slug);
+  fs.mkdirSync(wsDir, { recursive: true });
+
+  // Restore workspace-level files (e.g. README.md) from the blob.
+  if (blob.files.length > 0) {
+    applyBlobFiles(blob, wsDir);
+    console.log(chalk.green(`  Restored ${blob.files.length} workspace file(s) into ${wsDir}`));
+  }
+
   if (projectIds.length === 0) {
     console.log(chalk.yellow(`Workspace '${workspaceSlug}' has no member projects.`));
     return;
   }
 
-  console.log(chalk.bold(`Pulling workspace '${workspaceSlug}' (${projectIds.length} projects)...`));
+  console.log(chalk.bold(`Pulling workspace '${workspaceSlug}' (${projectIds.length} projects) into ${wsDir}...`));
 
-  // Pull each project.
+  // Pull each project, reusing the already-unlocked keypair.
   const projects = await cloud.listProjects();
   for (const id of projectIds) {
     const p = projects.find((x) => x.id === id);
@@ -224,6 +237,8 @@ export async function pullWorkspaceV2(opts: PullWorkspaceOptions): Promise<void>
       await pullProjectV2({
         configManager,
         projectSlug: p.slug,
+        targetPath: path.join(wsDir, p.slug),
+        keypair,
       });
     } catch (err: any) {
       console.error(chalk.red(`  Failed to pull project '${p.slug}': ${err.message}`));

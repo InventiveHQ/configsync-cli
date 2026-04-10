@@ -33,6 +33,10 @@ import {
   EntityBlob,
 } from '../lib/entity-blob.js';
 import { slugify } from '../lib/git-info.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import type { BlobFileEntry } from '../lib/entity-blob.js';
 
 export function registerWorkspaceCommand(program: Command): void {
   const cmd = program
@@ -144,6 +148,45 @@ export function registerWorkspaceCommand(program: Command): void {
     });
 
   cmd
+    .command('push <slug>')
+    .description('Push workspace state (README, metadata) to the cloud')
+    .action(async (slug: string) => {
+      const ctx = await loadCtx(true);
+      const ws = await findWorkspace(ctx.cloud, slug);
+
+      const info = await ctx.cloud.getEntity('workspace', ws.id);
+      if (!info.wrapped_dek) {
+        console.error(chalk.red(`Workspace '${slug}' has no wrapped DEK.`));
+        process.exit(1);
+      }
+      const dek = unwrapDEK(Buffer.from(info.wrapped_dek, 'base64'), ctx.keypair);
+
+      const ct = await ctx.cloud.getEntityBlob('workspace', ws.id);
+      const bytes = decryptEntityBlob(ct, dek, 'workspace', ws.id, ws.current_version);
+      const blob = bytesToBlob(bytes);
+
+      // Refresh README.md from disk.
+      const readmeFiles = captureReadme(ws.slug);
+      const existingFiles = (blob.files ?? []).filter((f: BlobFileEntry) => f.rel_path !== 'README.md');
+      const newBlob: EntityBlob = {
+        ...blob,
+        files: [...existingFiles, ...readmeFiles],
+        captured_at: new Date().toISOString(),
+      };
+      const newBytes = blobToBytes(newBlob);
+      const nextVersion = (ws.current_version ?? 0) + 1;
+      const newCt = encryptEntityBlob(newBytes, dek, 'workspace', ws.id, nextVersion);
+      const pushed = await ctx.cloud.pushEntityVersion(
+        'workspace',
+        ws.id,
+        newCt.toString('base64'),
+        hashBlob(newBytes),
+      );
+      const fileCount = readmeFiles.length;
+      console.log(chalk.green(`Pushed workspace '${slug}' v${pushed.version} (${fileCount} file(s))`));
+    });
+
+  cmd
     .command('add-project <workspaceSlug> <projectSlug>')
     .description('Add a project to a workspace')
     .action(async (workspaceSlug: string, projectSlug: string) => {
@@ -231,6 +274,33 @@ async function fetchAndDecryptBlob(
   return bytesToBlob(bytes);
 }
 
+/**
+ * Capture README.md from a workspace directory (if it exists) as a blob
+ * file entry. Checks the current working directory since workspaces are
+ * pulled/managed relative to cwd.
+ */
+function captureReadme(wsSlug: string): BlobFileEntry[] {
+  // Check cwd (user may be inside the workspace dir) and cwd/<slug>.
+  const candidates = [
+    path.resolve(wsSlug, 'README.md'),
+    path.resolve('README.md'),
+  ];
+  for (const abs of candidates) {
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      const content = fs.readFileSync(abs);
+      return [
+        {
+          rel_path: 'README.md',
+          mode: fs.statSync(abs).mode & 0o777,
+          content_b64: content.toString('base64'),
+          sha256: crypto.createHash('sha256').update(content).digest('hex'),
+        },
+      ];
+    }
+  }
+  return [];
+}
+
 export async function mutateWorkspaceProjectList(
   workspaceSlug: string,
   projectSlug: string,
@@ -270,8 +340,12 @@ export async function mutateWorkspaceProjectList(
     ids.delete(project.id);
   }
 
+  // Refresh README.md from disk if available; otherwise keep what's in the blob.
+  const readmeFiles = captureReadme(ws.slug);
+  const existingFiles = (blob.files ?? []).filter((f) => f.rel_path !== 'README.md');
   const newBlob: EntityBlob = {
     ...blob,
+    files: [...existingFiles, ...readmeFiles],
     extras: { ...(blob.extras ?? {}), project_ids: Array.from(ids) },
     captured_at: new Date().toISOString(),
   };
